@@ -177,12 +177,12 @@ property_data = {
         {
             "name": "Electric Company",
             "price": 150,
-            "rent": ["4× dice roll", "10× dice roll"],
+            "rent": ["4 * dice roll", "10 * dice roll"],
         },
         {
             "name": "Water Works",
             "price": 150,
-            "rent": ["4× dice roll", "10× dice roll"],
+            "rent": ["4 * dice roll", "10 * dice roll"],
         },
     ],
 }
@@ -198,6 +198,7 @@ def create_new_game():
                     buy_price=name["price"],
                     rent_price=[25, 50, 100, 200],
                     owner=None,
+                    position=name["position"],
                 )
                 properties.append(prop)
         elif group == "Utilities":
@@ -207,6 +208,7 @@ def create_new_game():
                     buy_price=name["price"],
                     rent_price=[4, 10],
                     owner=None,
+                    position=name["position"],
                 )
                 properties.append(prop)
         else:
@@ -218,6 +220,7 @@ def create_new_game():
                     rent_price=name["rent"],
                     house_hotel_price=name["house_cost"],
                     owner=None,
+                    position=name["position"],
                 )
                 properties.append(prop)
     return properties
