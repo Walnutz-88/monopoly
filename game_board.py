@@ -6,8 +6,8 @@ from redis.commands.json.path import Path
 import json
 import ipdb
 from properties import RegularProperty, RailroadProperty, UtilityProperty
-from player import Player
 from dice import Die, DieSet
+from Jiayi.player import Player
 
 r = redis.Redis(host="ai.thewcl.com", port=6379, db=3, password="atmega328")
 REDIS_KEY = "monopoly:game_state"
@@ -232,15 +232,15 @@ property_data = {
 
 @dataclass
 class MonopolyBoard:
+    players: list[Player]
+    regular_properties: list[RegularProperty] = field(default_factory=list)
+    railroad_properties: list[RailroadProperty] = field(default_factory=list)
+    utility_properties: list[UtilityProperty] = field(default_factory=list)
     state: str = "is_playing"  # is_playing, has_winner
-    players: list[str]
-    regular_properties: list[RegularProperty]
-    railroad_properties: list[RailroadProperty]
-    utility_properties: list[UtilityProperty]
     player_turn: int = 0
     
     def is_my_turn(self, player: str) -> bool:
-        return self.state == "is_playing" and player == self.player_turn
+        return self.state == "is_playing" and player == self.players[self.player_turn].name
 
     def make_move(self, player: str, index: int) -> dict:
         if self.state != "is_playing":
@@ -249,58 +249,60 @@ class MonopolyBoard:
         if not self.is_my_turn(player):
             return {"success": False, "message": f"It is not {player}'s turn."} 
         
+        print (f"{player} is rolling the dice...")
+        print (f"{player} is on {self.players[self.player_turn].position}.")
         die_set = DieSet(Die(), Die())
         roll = die_set.roll_twice()
         self.players[self.player_turn].move(roll[2])
-
-        #check player spot landed on
+        print (f"{player} rolled a {roll[2]}.")
+        print (f"{player} is now on {self.players[self.player_turn].position}.")
         
+        # Advance to next player's turn
+        self.player_turn = (self.player_turn + 1) % len(self.players)
         
         self.save_to_redis()
-        return {"success": True, "message": "Move accepted.", "board": self.to_dict()}
+        return {"success": True, "message": f"{player} rolled {roll[2]} and moved to position {self.players[(self.player_turn - 1) % len(self.players)].position}.", "board": self.to_dict()}
     
     def reset(self, new_players: list[str]):
         self.state = "is_playing"
-        self.players = new_players
+        self.players = [Player(name=name, token=f"token_{i+1}") for i, name in enumerate(new_players)]
         self.player_turn = 0
         self.regular_properties = []
         self.railroad_properties = []
         self.utility_properties = []
         for group, names in property_data.items():
             if group == "Railroads":
-                for name in names:
+                for prop_data in names:
                     prop = RailroadProperty(
-                        name=name,
-                        buy_price=name["price"],
+                        name=prop_data["name"],
+                        buy_price=prop_data["price"],
                         rent_price=[25, 50, 100, 200],
                         owner=None,
-                        position=name["position"],
+                        position=prop_data["position"],
                     )
                     self.railroad_properties.append(prop)
             elif group == "Utilities":
-                for name in names:
+                for prop_data in names:
                     prop = UtilityProperty(
-                        name=name,
-                        buy_price=name["price"],
+                        name=prop_data["name"],
+                        buy_price=prop_data["price"],
                         rent_price=[4, 10],
                         owner=None,
-                        position=name["position"],
+                        position=prop_data["position"],
                     )
                     self.utility_properties.append(prop)
             else:
-                for name in names:
+                for prop_data in names:
                     prop = RegularProperty(
-                        name=name,
+                        name=prop_data["name"],
                         color=group,
-                        buy_price=name["price"],
-                        rent_price=name["rent"],
-                        house_hotel_price=name["house_cost"],
+                        buy_price=prop_data["price"],
+                        rent_price=prop_data["rent"],
+                        house_hotel_price=prop_data["house_cost"],
                         owner=None,
-                        position=name["position"],
+                        position=prop_data["position"],
                     )
                     self.regular_properties.append(prop)
-        for player in self.players:
-            Player(player)
         self.save_to_redis()
 
     def save_to_redis(self):
@@ -309,7 +311,25 @@ class MonopolyBoard:
     @classmethod
     def load_from_redis(cls):
         data = r.json().get(REDIS_KEY)
-        return cls(**data) if data else cls()
+        if not data:
+            return cls(players=[])
+        
+        # Convert player dictionaries back to Player objects
+        players = [Player(**player_data) for player_data in data.get('players', [])]
+        
+        # Convert property dictionaries back to property objects
+        regular_properties = [RegularProperty(**prop_data) for prop_data in data.get('regular_properties', [])]
+        railroad_properties = [RailroadProperty(**prop_data) for prop_data in data.get('railroad_properties', [])]
+        utility_properties = [UtilityProperty(**prop_data) for prop_data in data.get('utility_properties', [])]
+        
+        return cls(
+            players=players,
+            regular_properties=regular_properties,
+            railroad_properties=railroad_properties,
+            utility_properties=utility_properties,
+            state=data.get('state', 'is_playing'),
+            player_turn=data.get('player_turn', 0)
+        )
 
     def to_dict(self):
         return asdict(self)
@@ -348,6 +368,8 @@ def post_move(req: MoveRequest):
 
 @app.post("/reset")
 def post_reset():
-    board = MonopolyBoard()
-    board.reset(players=["Player 1", "Player 2"])
+    player1 = Player(name="Player 1", token="token_1")
+    player2 = Player(name="Player 2", token="token_2")
+    board = MonopolyBoard([player1, player2])
+    board.reset(["Player 1", "Player 2"])
     return {"message": "Game reset", "board": board.to_dict()}

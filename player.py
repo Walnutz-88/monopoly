@@ -6,33 +6,30 @@ import redis.asyncio as aioredis
 import websockets
 import os
 
-redisPubSubKey = "ttt_game_state_changed"
+redisPubSubKey = "monopoly_game_state_changed"
 
 # FastAPI base URL
 BASE_URL = "http://localhost:8000"
 
-# CLI argument parsing
+# CLI argument parsing - only when run directly
 parser = argparse.ArgumentParser(description="Tic Tac Toe Game Client")
 parser.add_argument(
-    "--player", choices=["x", "o"], required=True, help="Which player are you?"
+    "--player", choices=["1", "2"], required=True, help="Which player are you?"
 )
 parser.add_argument(
     "--reset", action="store_true", help="Reset the board before starting the game."
 )
-parser.add_argument("--team", required=True, help="Your team number (used as Redis DB number)")
-args = parser.parse_args()
 
-i_am_playing = args.player
-team_number = int(args.team)
-team_number_str = f"{team_number:02d}"
-WS_URL = f"ws://ai.thewcl.com:87{team_number_str}"
-print(f"Connecting to WebSocket server at {WS_URL}")
+# Initialize defaults for when imported as module
+args = None
+i_am_playing = None
+WS_URL = f"ws://ai.thewcl.com:8703"
 
 # Redis Pub/Sub setup
 r = aioredis.Redis(
-    host="ai.thewcl.com", port=6379, db=team_number, password=os.getenv("WCL_REDIS_PASSWORD"), decode_responses=True
+    host="ai.thewcl.com", port=6379, db=3, password="atmega328", decode_responses=True
 )
-redisPubSubKey = "ttt_game_state_changed"
+redisPubSubKey = "monopoly_game_state_changed"
 
 # FastAPI base URL
 BASE_URL = "http://localhost:8000"
@@ -41,25 +38,53 @@ BASE_URL = "http://localhost:8000"
 async def reset_board():
     async with httpx.AsyncClient() as client:
         response = await client.post(f"{BASE_URL}/reset")
-        print("Game reset:", response.json())
+        print(f"Reset response status: {response.status_code}")
+        print(f"Reset response headers: {response.headers}")
+        print(f"Reset response content: {response.text}")
+        
+        if response.status_code == 200:
+            try:
+                if response.text.strip():  # Check if response has content
+                    result = response.json()
+                    print("Game reset:", result)
+                else:
+                    print("Game reset: Empty response (success)")
+            except json.JSONDecodeError as e:
+                print(f"Failed to parse JSON response: {e}")
+                print(f"Raw response: {response.text}")
+        else:
+            print(f"Reset failed with status {response.status_code}: {response.text}")
 
 
 async def get_board():
     async with httpx.AsyncClient() as client:
         response = await client.get(f"{BASE_URL}/state")
-        return response.json()
+        if response.status_code == 200:
+            try:
+                return response.json()
+            except json.JSONDecodeError as e:
+                print(f"Failed to parse JSON response from /state: {e}")
+                print(f"Raw response: {response.text}")
+                return None
+        else:
+            print(f"Failed to get board state: {response.status_code} - {response.text}")
+            return None
 
 
-async def post_move(player, index):
+async def post_move(player):
     async with httpx.AsyncClient() as client:
         response = await client.post(
-            f"{BASE_URL}/move", json={"player": player, "index": index}
+            f"{BASE_URL}/move", json={"player": player, "index": 0}
         )
         return response
 
 
 async def send_positions_over_websocket(websocket):
     board = await get_board()
+    if board is None:
+        print("Cannot send positions - failed to get board state")
+        return
+    
     positions = board.get("positions")
     if isinstance(positions, list) and len(positions) == 9:
         await websocket.send(json.dumps({"positions": positions}))
@@ -67,6 +92,10 @@ async def send_positions_over_websocket(websocket):
 
 async def handle_board_state(websocket):
     board = await get_board()
+    
+    if board is None:
+        print("Failed to get board state")
+        return
 
     print(json.dumps(board, indent=2))
 
@@ -74,18 +103,21 @@ async def handle_board_state(websocket):
         print("Game over.")
         return
 
-    if board["player_turn"] == i_am_playing:
-        move = input("Your turn! Which square do you want to play? (0-8): ")
-        if move.isdigit():
-            index = int(move)
-            response = await post_move(i_am_playing, index)
-            if response.status_code == 200:
-                print(response.json()["message"])
+    current_turn_player = "1" if board["player_turn"] == 0 else "2"
+    if current_turn_player == i_am_playing:
+        print("Rolling Dice...")
+        player_name = f"Player {i_am_playing}"
+        response = await post_move(player_name)
+        if response.status_code == 200:
+            try:
+                result = response.json()
+                print(result.get("message", ""))
                 await r.publish(redisPubSubKey, "update")
-            else:
-                print("Error:", response.json()["detail"])
+            except json.JSONDecodeError as e:
+                print(f"Failed to parse JSON response from /move: {e}")
+                print(f"Raw response: {response.text}")
         else:
-            print("Please enter a valid number.")
+            print(f"Move failed with status {response.status_code}: {response.text}")
     else:
         print("Waiting for the other player...")
 
@@ -98,10 +130,18 @@ async def listen_for_updates(websocket):
     print(f"Subscribed to {redisPubSubKey}. Waiting for updates...\n")
     await handle_board_state(websocket)
 
-    async for message in pubsub.listen():
-        if message["type"] == "message":
-            print("\nReceived update!")
-            await handle_board_state(websocket)
+    try:
+        async for message in pubsub.listen():
+            if message["type"] == "message":
+                print("\nReceived update!")
+                await handle_board_state(websocket)
+    except asyncio.CancelledError:
+        print("\nConnection cancelled.")
+    except Exception as e:
+        print(f"\nError in listen_for_updates: {e}")
+    finally:
+        await pubsub.unsubscribe(redisPubSubKey)
+        await pubsub.aclose()
 
 
 async def main():
@@ -109,9 +149,22 @@ async def main():
         await reset_board()
         return
 
-    async with websockets.connect(WS_URL) as websocket:
-        await listen_for_updates(websocket)
+    try:
+        async with websockets.connect(WS_URL) as websocket:
+            await listen_for_updates(websocket)
+    except KeyboardInterrupt:
+        print("\nExiting gracefully...")
+    except Exception as e:
+        print(f"\nError: {e}")
 
 
 if __name__ == "__main__":
-    asyncio.run(main())
+    args = parser.parse_args()
+    i_am_playing = args.player
+    print(f"Connecting to WebSocket server at {WS_URL}")
+    try:
+        asyncio.run(main())
+    except KeyboardInterrupt:
+        print("\nExiting gracefully...")
+    except Exception as e:
+        print(f"\nUnexpected error: {e}")
