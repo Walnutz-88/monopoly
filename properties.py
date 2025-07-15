@@ -38,3 +38,21 @@ class UtilityProperty:
     
     def __str__(self):
         return f"{self.name} - {self.buy_price} - {self.rent_price} - {self.owner} - {self.mortgaged}"
+    
+@dataclass
+class ChestChanceSpace:
+    name: str
+    position: int
+    chest: bool = False
+    chance: bool = False
+    
+    def __str__(self):
+        return f"{self.name} - Position {self.position} - Chest: {self.chest} - Chance: {self.chance}"
+    
+@dataclass
+class SpecialSpace:
+    name: str
+    position: int
+    
+    def __str__(self):
+        return f"{self.name} - Position {self.position}"

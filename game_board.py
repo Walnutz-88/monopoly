@@ -5,7 +5,7 @@ import redis
 from redis.commands.json.path import Path
 import json
 import ipdb
-from properties import RegularProperty, RailroadProperty, UtilityProperty
+from properties import RegularProperty, RailroadProperty, UtilityProperty, ChestChanceSpace, SpecialSpace
 from dice import Die, DieSet
 from Jiayi.player import Player
 
@@ -228,6 +228,31 @@ property_data = {
         },
     ],
 }
+chance_and_chest_spaces = {
+    "Chance": [
+        {"position": 7},
+        {"position": 22},
+        {"position": 36},
+    ],
+    "Community Chest": [
+        {"position": 2},
+        {"position": 17},
+        {"position": 33},
+    ],
+}
+other_spaces = {
+    "Corners": [
+        {"name": "Go", "position": 0},
+        {"name": "Jail / Just Visiting", "position": 10},
+        {"name": "Free Parking", "position": 20},
+        {"name": "Go To Jail", "position": 30},
+    ],
+    "Taxes": [
+        {"name": "Income Tax", "position": 4},
+        {"name": "Luxury Tax", "position": 38},
+    ],
+}
+
 
 
 @dataclass
@@ -236,11 +261,80 @@ class MonopolyBoard:
     regular_properties: list[RegularProperty] = field(default_factory=list)
     railroad_properties: list[RailroadProperty] = field(default_factory=list)
     utility_properties: list[UtilityProperty] = field(default_factory=list)
+    chance_and_chest_spaces: list[ChestChanceSpace] = field(default_factory=list)
+    other_spaces: list[SpecialSpace] = field(default_factory=list)
     state: str = "is_playing"  # is_playing, has_winner
     player_turn: int = 0
     
     def is_my_turn(self, player: str) -> bool:
         return self.state == "is_playing" and player == self.players[self.player_turn].name
+    
+    def get_space_details(self, position: int) -> dict:
+        """Get detailed information about a space based on its position."""
+        # Check regular properties
+        for prop in self.regular_properties:
+            if prop.position == position:
+                return {
+                    "type": "regular_property",
+                    "name": prop.name,
+                    "color": prop.color,
+                    "buy_price": prop.buy_price,
+                    "rent_price": prop.rent_price,
+                    "house_hotel_price": prop.house_hotel_price,
+                    "owner": prop.owner,
+                    "position": prop.position
+                }
+        
+        # Check railroad properties
+        for prop in self.railroad_properties:
+            if prop.position == position:
+                return {
+                    "type": "railroad_property",
+                    "name": prop.name,
+                    "buy_price": prop.buy_price,
+                    "rent_price": prop.rent_price,
+                    "owner": prop.owner,
+                    "position": prop.position
+                }
+        
+        # Check utility properties
+        for prop in self.utility_properties:
+            if prop.position == position:
+                return {
+                    "type": "utility_property",
+                    "name": prop.name,
+                    "buy_price": prop.buy_price,
+                    "rent_price": prop.rent_price,
+                    "owner": prop.owner,
+                    "position": prop.position
+                }
+        
+        # Check chance and community chest spaces
+        for space in self.chance_and_chest_spaces:
+            if space.position == position:
+                return {
+                    "type": "chance_chest_space",
+                    "name": space.name,
+                    "position": space.position,
+                    "chance": space.chance,
+                    "chest": space.chest
+                }
+        
+        # Check other special spaces
+        for space in self.other_spaces:
+            if space.position == position:
+                return {
+                    "type": "special_space",
+                    "name": space.name,
+                    "position": space.position
+                }
+        
+        # If no space found, return generic position info
+        return {
+            "type": "unknown",
+            "name": f"Position {position}",
+            "position": position
+        }
 
     def make_move(self, player: str, index: int) -> dict:
         if self.state != "is_playing":
@@ -257,11 +351,20 @@ class MonopolyBoard:
         print (f"{player} rolled a {roll[2]}.")
         print (f"{player} is now on {self.players[self.player_turn].position}.")
         
+        # Get space details for the position the player landed on
+        current_position = self.players[self.player_turn].position
+        space_details = self.get_space_details(current_position)
+        
         # Advance to next player's turn
         self.player_turn = (self.player_turn + 1) % len(self.players)
         
         self.save_to_redis()
-        return {"success": True, "message": f"{player} rolled {roll[2]} and moved to position {self.players[(self.player_turn - 1) % len(self.players)].position}.", "board": self.to_dict()}
+        return {
+            "success": True, 
+            "message": f"{player} rolled {roll[2]} and moved to position {current_position}.", 
+            "board": self.to_dict(),
+            "space_details": space_details
+        }
     
     def reset(self, new_players: list[str]):
         self.state = "is_playing"
@@ -270,6 +373,8 @@ class MonopolyBoard:
         self.regular_properties = []
         self.railroad_properties = []
         self.utility_properties = []
+        self.chance_and_chest_spaces = []
+        self.other_spaces = []
         for group, names in property_data.items():
             if group == "Railroads":
                 for prop_data in names:
@@ -303,6 +408,35 @@ class MonopolyBoard:
                         position=prop_data["position"],
                     )
                     self.regular_properties.append(prop)
+        
+        for group, names in chance_and_chest_spaces.items():
+            if group == "Chance":
+                for prop_data in names:
+                    prop = ChestChanceSpace(
+                        name="Chance",
+                        position=prop_data["position"],
+                        chance=True,
+                        chest=False,
+                    )
+                    self.chance_and_chest_spaces.append(prop)
+            elif group == "Community Chest":
+                for prop_data in names:
+                    prop = ChestChanceSpace(
+                        name="Community Chest",
+                        position=prop_data["position"],
+                        chest=True,
+                        chance=False,
+                    )
+                    self.chance_and_chest_spaces.append(prop)
+        
+        for group, names in other_spaces.items():
+            for prop_data in names:
+                prop = SpecialSpace(
+                    name=prop_data["name"],
+                    position=prop_data["position"],
+                )
+                self.other_spaces.append(prop)
+        
         self.save_to_redis()
 
     def save_to_redis(self):
@@ -321,12 +455,15 @@ class MonopolyBoard:
         regular_properties = [RegularProperty(**prop_data) for prop_data in data.get('regular_properties', [])]
         railroad_properties = [RailroadProperty(**prop_data) for prop_data in data.get('railroad_properties', [])]
         utility_properties = [UtilityProperty(**prop_data) for prop_data in data.get('utility_properties', [])]
-        
+        chance_and_chest_spaces = [ChestChanceSpace(**prop_data) for prop_data in data.get('chance_and_chest_spaces', [])]
+        other_spaces = [SpecialSpace(**prop_data) for prop_data in data.get('other_spaces', [])]
         return cls(
             players=players,
             regular_properties=regular_properties,
             railroad_properties=railroad_properties,
             utility_properties=utility_properties,
+            chance_and_chest_spaces=chance_and_chest_spaces,
+            other_spaces=other_spaces,
             state=data.get('state', 'is_playing'),
             player_turn=data.get('player_turn', 0)
         )

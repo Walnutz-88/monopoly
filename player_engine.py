@@ -9,9 +9,6 @@ import sys
 
 redisPubSubKey = "monopoly_game_state_changed"
 
-# FastAPI base URL
-BASE_URL = "http://localhost:8000"
-
 # CLI argument parsing - only when run directly
 parser = argparse.ArgumentParser(description="Tic Tac Toe Game Client")
 parser.add_argument(
@@ -83,10 +80,10 @@ async def post_move(player):
         return response
 
 
-async def wait_for_user_input():
+async def wait_for_user_input(message="\nPress Enter to continue..."):
     """Wait for user to press Enter to continue"""
     def input_thread():
-        input("\nPress Enter to continue...")
+        input(message)
     
     loop = asyncio.get_event_loop()
     await loop.run_in_executor(None, input_thread)
@@ -103,21 +100,25 @@ async def send_positions_over_websocket(websocket):
         await websocket.send(json.dumps({"positions": positions}))
 
 
-async def handle_board_state(websocket):
+async def handle_board_state(websocket, wait_for_start=False, publish_update=True):
     board = await get_board()
     
     if board is None:
         print("Failed to get board state")
-        return
+        return False  # Return False to indicate no move was made
 
     print(json.dumps(board, indent=2))
 
     if board["state"] != "is_playing":
         print("Game over.")
-        return
+        return False  # Return False to indicate no move was made
 
     current_turn_player = "1" if board["player_turn"] == 0 else "2"
     if current_turn_player == i_am_playing:
+        # Wait for user to press Enter to start their turn (first prompt)
+        if wait_for_start and not args.auto:
+            await wait_for_user_input("\nIt's your turn, press Enter to roll: ")
+        
         print("Rolling Dice...")
         player_name = f"Player {i_am_playing}"
         response = await post_move(player_name)
@@ -125,7 +126,14 @@ async def handle_board_state(websocket):
             try:
                 result = response.json()
                 print(result.get("message", ""))
-                await r.publish(redisPubSubKey, "update")
+                space_details = result.get("space_details")
+                if space_details:
+                    print("Space Details:", space_details)
+                # Only publish update if explicitly requested (for auto mode or after manual turn end)
+                if publish_update:
+                    await r.publish(redisPubSubKey, "update")
+                await send_positions_over_websocket(websocket)
+                return True  # Return True to indicate we made a move
             except json.JSONDecodeError as e:
                 print(f"Failed to parse JSON response from /move: {e}")
                 print(f"Raw response: {response.text}")
@@ -135,26 +143,44 @@ async def handle_board_state(websocket):
         print("Waiting for the other player...")
 
     await send_positions_over_websocket(websocket)
+    return False  # Return False to indicate we didn't make a move
 
 
 async def listen_for_updates_manual(websocket):
-    """Manual step-through mode - wait for Enter before each action"""
+    """Manual step-through mode - two prompts per turn: start turn and end turn"""
     pubsub = r.pubsub()
     await pubsub.subscribe(redisPubSubKey)
     print(f"Subscribed to {redisPubSubKey}. Waiting for updates...\n")
-    print("Manual mode: Press Enter to continue after each update.")
-    await handle_board_state(websocket)
+    print("Manual mode: Press Enter to start your turn, then press Enter again to end your turn.")
+    print("Other player moves are automatic.")
     
-    if not args.auto:
-        await wait_for_user_input()
+    # Handle initial board state
+    board = await get_board()
+    if board and board["state"] == "is_playing":
+        current_turn_player = "1" if board["player_turn"] == 0 else "2"
+        i_made_move = await handle_board_state(websocket, wait_for_start=(current_turn_player == i_am_playing), publish_update=False)
+        # Second prompt: wait for Enter to end turn after making a move
+        if i_made_move and not args.auto:
+            await wait_for_user_input("\nPress Enter to end your turn: ")
+            # Now publish the update to notify the other player
+            await r.publish(redisPubSubKey, "update")
 
     try:
         async for message in pubsub.listen():
             if message["type"] == "message":
                 print("\nReceived update!")
-                await handle_board_state(websocket)
-                if not args.auto:
-                    await wait_for_user_input()
+                board = await get_board()
+                if board and board["state"] == "is_playing":
+                    current_turn_player = "1" if board["player_turn"] == 0 else "2"
+                    i_made_move = await handle_board_state(websocket, wait_for_start=(current_turn_player == i_am_playing), publish_update=False)
+                    # Second prompt: wait for Enter to end turn after making a move
+                    if i_made_move and not args.auto:
+                        await wait_for_user_input("\nPress Enter to end your turn: ")
+                        # Now publish the update to notify the other player
+                        await r.publish(redisPubSubKey, "update")
+                else:
+                    # Game over or other state, just handle normally
+                    await handle_board_state(websocket)
     except asyncio.CancelledError:
         print("\nConnection cancelled.")
     except Exception as e:
