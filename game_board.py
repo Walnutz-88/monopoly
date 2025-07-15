@@ -349,6 +349,9 @@ class MonopolyBoard:
         
         current_player = self.players[self.player_turn]
         
+        # Display money at the beginning of the turn
+        print(f"\n{player} starts turn with ${current_player.money}")
+        
         die_set = DieSet(Die(), Die())
         roll = die_set.roll_twice()
         current_player.move(roll[2])
@@ -357,10 +360,18 @@ class MonopolyBoard:
         current_position = current_player.position
         space_details = self.get_space_details(current_position)
         
-        # Handle property transactions
+        # Handle property transactions and special spaces
         transaction_message = ""
         if space_details["type"] in ["regular_property", "railroad_property", "utility_property"]:
-            transaction_message = self._handle_property_transaction(current_player, space_details)
+            transaction_message = self._handle_property_transaction(current_player, space_details, roll[2])
+        elif space_details["type"] == "special_space":
+            transaction_message = self._handle_special_space(current_player, space_details)
+        
+        # Get final position (might have changed due to special spaces like "Go To Jail")
+        final_position = current_player.position
+        
+        # Display money at the end of the turn
+        print(f"{player} ends turn with ${current_player.money}")
         
         # Advance to next player's turn
         self.player_turn = (self.player_turn + 1) % len(self.players)
@@ -368,11 +379,11 @@ class MonopolyBoard:
         self.save_to_redis()
         return {
             "success": True, 
-            "message": f"{player} rolled {roll[2]} and moved to position {current_position}. {transaction_message}", 
+            "message": f"{player} rolled {roll[2]} and moved to position {final_position}. {transaction_message}", 
             "board": self.to_dict(),
             "space_details": space_details
         }
-    def _handle_property_transaction(self, current_player: Player, space_details: dict) -> str:
+    def _handle_property_transaction(self, current_player: Player, space_details: dict, dice_roll: int = 7) -> str:
         """Handle property buying or rent payment when a player lands on a property."""
         property_name = space_details["name"]
         owner = space_details["owner"]
@@ -387,7 +398,7 @@ class MonopolyBoard:
             
         # If property is owned by another player, pay rent
         elif owner != current_player.name:
-            rent_amount = self._calculate_rent(space_details)
+            rent_amount = self._calculate_rent(space_details, dice_roll)
             current_player.pay(rent_amount)
             
             # Find the owner and pay them rent
@@ -401,6 +412,43 @@ class MonopolyBoard:
         # Player owns the property
         else:
             return f"Landed on own property: {property_name}."
+    
+    def _handle_special_space(self, current_player: Player, space_details: dict) -> str:
+        """Handle actions for special spaces when a player lands on them."""
+        space_name = space_details["name"]
+        
+        if space_name == "Go":
+            # Player already collected $200 from passing GO during move
+            return "Landed on GO! You collect $200."
+        
+        elif space_name == "Jail / Just Visiting":
+            if current_player.in_jail:
+                return "You are in jail."
+            else:
+                return "Just visiting jail."
+        
+        elif space_name == "Free Parking":
+            return "Free parking - nothing happens."
+        
+        elif space_name == "Go To Jail":
+            current_player.go_to_jail()
+            return "Go to jail! Do not pass GO, do not collect $200."
+        
+        elif space_name == "Income Tax":
+            # Income Tax: Pay $200 or 10% of total worth (whichever is less)
+            # For simplicity, we'll just charge $200
+            tax_amount = 200
+            current_player.pay(tax_amount)
+            return f"Paid ${tax_amount} in income tax."
+        
+        elif space_name == "Luxury Tax":
+            # Luxury Tax: Pay $100
+            tax_amount = 100
+            current_player.pay(tax_amount)
+            return f"Paid ${tax_amount} in luxury tax."
+        
+        else:
+            return f"Landed on {space_name}."
     
     def handle_property_purchase(self, player_name: str, property_position: int, decision: str) -> dict:
         """Handle a property purchase decision made by a player."""
@@ -470,7 +518,7 @@ class MonopolyBoard:
                     prop.owner = owner_name
                     break
     
-    def _calculate_rent(self, space_details: dict) -> int:
+    def _calculate_rent(self, space_details: dict, dice_roll: int = 7) -> int:
         """Calculate rent for a property based on its type and ownership."""
         if space_details["type"] == "regular_property":
             # For regular properties, rent is based on house count (index 0 for no houses)
@@ -489,14 +537,12 @@ class MonopolyBoard:
             # For utilities, rent is based on dice roll multiplier
             owner = space_details["owner"]
             utilities_owned = sum(1 for prop in self.utility_properties if prop.owner == owner)
-            rent_multiplier = space_details["rent_price"]
             
             # If owner has 1 utility, multiply dice roll by 4; if 2 utilities, multiply by 10
-            multiplier = rent_multiplier[0] if utilities_owned == 1 else rent_multiplier[1]
+            multiplier = 4 if utilities_owned == 1 else 10
             
-            # For simplicity, assume a dice roll of 7 (average)
-            # In a real game, you'd use the actual dice roll
-            return 7 * multiplier
+            # Use the actual dice roll for utility rent calculation
+            return dice_roll * multiplier
         
         return 0
     
