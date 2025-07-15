@@ -10,9 +10,9 @@ import sys
 redisPubSubKey = "monopoly_game_state_changed"
 
 # CLI argument parsing - only when run directly
-parser = argparse.ArgumentParser(description="Tic Tac Toe Game Client")
+parser = argparse.ArgumentParser(description="Monopoly Game Client")
 parser.add_argument(
-    "--player", choices=["1", "2"], required=True, help="Which player are you?"
+    "--player", choices=["1", "2", "3", "4", "5", "6"], help="Which player are you?"
 )
 parser.add_argument(
     "--reset", action="store_true", help="Reset the board before starting the game."
@@ -36,9 +36,28 @@ redisPubSubKey = "monopoly_game_state_changed"
 BASE_URL = "http://localhost:8000"
 
 
+async def get_num_players():
+    """Get number of players from user input"""
+    def input_thread():
+        while True:
+            try:
+                num_players = int(input("How many players? (2-6): "))
+                if 2 <= num_players <= 6:
+                    return num_players
+                else:
+                    print("Please enter a number between 2 and 6.")
+            except ValueError:
+                print("Please enter a valid number.")
+    
+    loop = asyncio.get_event_loop()
+    return await loop.run_in_executor(None, input_thread)
+
 async def reset_board():
+    # Prompt for number of players
+    num_players = await get_num_players()
+    
     async with httpx.AsyncClient() as client:
-        response = await client.post(f"{BASE_URL}/reset")
+        response = await client.post(f"{BASE_URL}/reset", json={"num_players": num_players})
         print(f"Reset response status: {response.status_code}")
         print(f"Reset response headers: {response.headers}")
         print(f"Reset response content: {response.text}")
@@ -48,6 +67,9 @@ async def reset_board():
                 if response.text.strip():  # Check if response has content
                     result = response.json()
                     print("Game reset:", result)
+                    print(f"\nYou can now run the following commands in separate terminal windows:")
+                    for i in range(1, num_players + 1):
+                        print(f"  uv run player_engine.py --player {i}")
                 else:
                     print("Game reset: Empty response (success)")
             except json.JSONDecodeError as e:
@@ -134,7 +156,7 @@ async def handle_board_state(websocket, wait_for_start=False, publish_update=Tru
         print("Game over.")
         return False  # Return False to indicate no move was made
 
-    current_turn_player = "1" if board["player_turn"] == 0 else "2"
+    current_turn_player = str(board["player_turn"] + 1)
     if current_turn_player == i_am_playing:
         # Wait for user to press Enter to start their turn (first prompt)
         if wait_for_start and not args.auto:
@@ -211,7 +233,7 @@ async def listen_for_updates_manual(websocket):
     # Handle initial board state
     board = await get_board()
     if board and board["state"] == "is_playing":
-        current_turn_player = "1" if board["player_turn"] == 0 else "2"
+        current_turn_player = str(board["player_turn"] + 1)
         i_made_move = await handle_board_state(websocket, wait_for_start=(current_turn_player == i_am_playing), publish_update=False)
         # Second prompt: wait for Enter to end turn after making a move
         if i_made_move and not args.auto:
@@ -225,7 +247,7 @@ async def listen_for_updates_manual(websocket):
                 print("\nReceived update!")
                 board = await get_board()
                 if board and board["state"] == "is_playing":
-                    current_turn_player = "1" if board["player_turn"] == 0 else "2"
+                    current_turn_player = str(board["player_turn"] + 1)
                     i_made_move = await handle_board_state(websocket, wait_for_start=(current_turn_player == i_am_playing), publish_update=False)
                     # Second prompt: wait for Enter to end turn after making a move
                     if i_made_move and not args.auto:
@@ -284,8 +306,16 @@ async def main():
 
 if __name__ == "__main__":
     args = parser.parse_args()
+    
+    # Validate arguments
+    if not args.reset and not args.player:
+        parser.error("--player is required when not using --reset")
+    
     i_am_playing = args.player
-    print(f"Connecting to WebSocket server at {WS_URL}")
+    
+    if not args.reset:
+        print(f"Connecting to WebSocket server at {WS_URL}")
+    
     try:
         asyncio.run(main())
     except KeyboardInterrupt:

@@ -655,18 +655,16 @@ def post_purchase_decision(req: PurchaseDecisionRequest):
     return result
 
 
+class ResetRequest(BaseModel):
+    num_players: int
+
 @app.post("/reset")
-def post_reset():
-    # Prompt for number of players
-    while True:
-        try:
-            num_players = int(input("How many players? (2-6): "))
-            if 2 <= num_players <= 6:
-                break
-            else:
-                print("Please enter a number between 2 and 6.")
-        except ValueError:
-            print("Please enter a valid number.")
+def post_reset(req: ResetRequest):
+    # Validate number of players
+    if not (2 <= req.num_players <= 6):
+        raise HTTPException(status_code=400, detail="Number of players must be between 2 and 6")
+    
+    num_players = req.num_players
     
     # Create the specified number of players
     player_names = [f"Player {i+1}" for i in range(num_players)]
