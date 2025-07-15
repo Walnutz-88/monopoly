@@ -1,4 +1,4 @@
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect
 from pydantic import BaseModel
 from dataclasses import dataclass, field, asdict
 import redis
@@ -9,6 +9,8 @@ import subprocess
 from properties import RegularProperty, RailroadProperty, UtilityProperty, ChestChanceSpace, SpecialSpace
 from dice import Die, DieSet
 from Jiayi.player import Player
+import asyncio
+from typing import List
 
 r = redis.Redis(host="ai.thewcl.com", port=6379, db=3, password="atmega328")
 REDIS_KEY = "monopoly:game_state"
@@ -573,6 +575,16 @@ class MonopolyBoard:
 
     def save_to_redis(self):
         r.json().set(REDIS_KEY, Path.root_path(), self.to_dict())
+        # Broadcast game state update to all connected WebSocket clients
+        asyncio.create_task(self.broadcast_game_state())
+    
+    async def broadcast_game_state(self):
+        """Broadcast current game state to all connected WebSocket clients"""
+        game_state = self.to_dict()
+        await manager.broadcast(json.dumps({
+            "type": "game_state_update",
+            "data": game_state
+        }))
 
     @classmethod
     def load_from_redis(cls):
@@ -613,6 +625,31 @@ class MonopolyBoard:
 # ----------------------------
 
 app = FastAPI()
+
+# WebSocket connection manager
+class ConnectionManager:
+    def __init__(self):
+        self.active_connections: List[WebSocket] = []
+
+    async def connect(self, websocket: WebSocket):
+        await websocket.accept()
+        self.active_connections.append(websocket)
+
+    def disconnect(self, websocket: WebSocket):
+        self.active_connections.remove(websocket)
+
+    async def send_personal_message(self, message: str, websocket: WebSocket):
+        await websocket.send_text(message)
+
+    async def broadcast(self, message: str):
+        for connection in self.active_connections:
+            try:
+                await connection.send_text(message)
+            except:
+                # Remove broken connections
+                self.active_connections.remove(connection)
+
+manager = ConnectionManager()
 
 
 class MoveRequest(BaseModel):
@@ -657,6 +694,31 @@ def post_purchase_decision(req: PurchaseDecisionRequest):
 
 class ResetRequest(BaseModel):
     num_players: int
+
+@app.websocket("/ws")
+async def websocket_endpoint(websocket: WebSocket):
+    await manager.connect(websocket)
+    try:
+        # Send initial game state
+        board = MonopolyBoard.load_from_redis()
+        await manager.send_personal_message(json.dumps({
+            "type": "game_state_update",
+            "data": board.to_dict()
+        }), websocket)
+        
+        while True:
+            # Keep connection alive and handle any incoming messages
+            data = await websocket.receive_text()
+            # Handle incoming WebSocket messages if needed
+            message = json.loads(data)
+            if message.get("type") == "request_game_state":
+                board = MonopolyBoard.load_from_redis()
+                await manager.send_personal_message(json.dumps({
+                    "type": "game_state_update",
+                    "data": board.to_dict()
+                }), websocket)
+    except WebSocketDisconnect:
+        manager.disconnect(websocket)
 
 @app.post("/reset")
 def post_reset(req: ResetRequest):
