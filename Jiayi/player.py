@@ -134,3 +134,14 @@ class Player:
             f"JailFree={self.get_out_of_jail_free}, InJail={self.in_jail}, "
             f"Bankrupt={self.bankrupt})"
         )
+
+if __name__ == "__main__":
+    # Basic smoke-test
+    p = Player(name="Bob", token="🎩")
+    print("Starting:", p)
+    p.move(10)
+    print("After moving 10:", p)
+    p.pay(1600)
+    print("After over-pay:", p)
+
+
