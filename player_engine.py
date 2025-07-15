@@ -5,6 +5,7 @@ import httpx
 import redis.asyncio as aioredis
 import websockets
 import os
+import sys
 
 redisPubSubKey = "monopoly_game_state_changed"
 
@@ -18,6 +19,9 @@ parser.add_argument(
 )
 parser.add_argument(
     "--reset", action="store_true", help="Reset the board before starting the game."
+)
+parser.add_argument(
+    "--auto", action="store_true", help="Automatic mode - runs continuously without waiting for input."
 )
 
 # Initialize defaults for when imported as module
@@ -79,6 +83,15 @@ async def post_move(player):
         return response
 
 
+async def wait_for_user_input():
+    """Wait for user to press Enter to continue"""
+    def input_thread():
+        input("\nPress Enter to continue...")
+    
+    loop = asyncio.get_event_loop()
+    await loop.run_in_executor(None, input_thread)
+
+
 async def send_positions_over_websocket(websocket):
     board = await get_board()
     if board is None:
@@ -124,7 +137,35 @@ async def handle_board_state(websocket):
     await send_positions_over_websocket(websocket)
 
 
+async def listen_for_updates_manual(websocket):
+    """Manual step-through mode - wait for Enter before each action"""
+    pubsub = r.pubsub()
+    await pubsub.subscribe(redisPubSubKey)
+    print(f"Subscribed to {redisPubSubKey}. Waiting for updates...\n")
+    print("Manual mode: Press Enter to continue after each update.")
+    await handle_board_state(websocket)
+    
+    if not args.auto:
+        await wait_for_user_input()
+
+    try:
+        async for message in pubsub.listen():
+            if message["type"] == "message":
+                print("\nReceived update!")
+                await handle_board_state(websocket)
+                if not args.auto:
+                    await wait_for_user_input()
+    except asyncio.CancelledError:
+        print("\nConnection cancelled.")
+    except Exception as e:
+        print(f"\nError in listen_for_updates: {e}")
+    finally:
+        await pubsub.unsubscribe(redisPubSubKey)
+        await pubsub.aclose()
+
+
 async def listen_for_updates(websocket):
+    """Original automatic mode"""
     pubsub = r.pubsub()
     await pubsub.subscribe(redisPubSubKey)
     print(f"Subscribed to {redisPubSubKey}. Waiting for updates...\n")
@@ -151,7 +192,10 @@ async def main():
 
     try:
         async with websockets.connect(WS_URL) as websocket:
-            await listen_for_updates(websocket)
+            if args.auto:
+                await listen_for_updates(websocket)
+            else:
+                await listen_for_updates_manual(websocket)
     except KeyboardInterrupt:
         print("\nExiting gracefully...")
     except Exception as e:
