@@ -12,6 +12,7 @@ dependencies = [
     "httpx>=0.28.1",
     "ipdb>=0.13.13",
     "redis>=6.2.0",
+    "tk>=0.1.0",
     "uvicorn>=0.34.3",
     "websockets>=15.0.1",
 ]

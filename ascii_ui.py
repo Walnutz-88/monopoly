@@ -1,57 +1,49 @@
+import tkinter as tk
+from tkinter import ttk
 import asyncio
 import websockets
 import json
 import os
 import argparse
 
-# Parse required --team argument
-parser = argparse.ArgumentParser(description="ASCII UI for Tic Tac Toe")
-parser.add_argument("--team", required=True, help="Your team number (used as WebSocket port)")
-args = parser.parse_args()
-team_number = int(args.team)
-team_number_str = f"{team_number:02d}"
+# WebSocket URL
+WS_URL = "ws://localhost:8000/state"
 
-# Build the WebSocket URL dynamically
-WEBSOCKET_URL = f"ws://ai.thewcl.com:87{team_number_str}"
+class MonopolyUI:
+    def __init__(self, root):
+        self.root = root
+        self.root.title("Monopoly Game")
 
+        # Title Label
+        self.title_label = ttk.Label(root, text="Welcome to Monopoly", font=("Helvetica", 20))
+        self.title_label.pack(pady=20)
 
-def clear_terminal():
-    os.system("cls" if os.name == "nt" else "clear")
+        # Player selection
+        self.player_count_label = ttk.Label(root, text="Select Number of Players (2-6):")
+        self.player_count_label.pack()
 
+        self.player_count_var = tk.IntVar(value=2)
+        self.player_count_spinbox = ttk.Spinbox(root, from_=2, to=6, textvariable=self.player_count_var, width=5)
+        self.player_count_spinbox.pack(pady=10)
 
-def format_cell(value, index):
-    upper = str(value).upper()
-    return upper if upper in ["X", "O"] else str(index)
+        # Start Button
+        self.start_button = ttk.Button(root, text="Start Game", command=self.start_game)
+        self.start_button.pack(pady=20)
 
+    def start_game(self):
+        player_count = self.player_count_var.get()
+        print(f"Starting game with {player_count} players")
+        # Here we would normally send the player_count to a backend or use it to configure the game
 
-def render_board(positions):
-    def row(start):
-        return f" {format_cell(positions[start], start)} | {format_cell(positions[start + 1], start + 1)} | {format_cell(positions[start + 2], start + 2)} "
-
-    line = "---+---+---"
-    print(row(0))
-    print(line)
-    print(row(3))
-    print(line)
-    print(row(6))
-    print()
-
-
-async def listen_for_updates():
-    async with websockets.connect(WEBSOCKET_URL) as ws:
-        print(f"Connected to {WEBSOCKET_URL}")
-        async for message in ws:
-            try:
-                data = json.loads(message)
-                positions = data.get("positions")
-                if isinstance(positions, list) and len(positions) == 9:
-                    clear_terminal()
-                    render_board(positions)
-                else:
-                    print("Invalid board data received.")
-            except json.JSONDecodeError:
-                print("Received non-JSON message.")
-
+async def websocket_listener():
+    async with websockets.connect(WS_URL) as websocket:
+        print(f"Connected to WebSocket at {WS_URL}")
+        async for message in websocket:
+            data = json.loads(message)
+            print("Received data:", data)
 
 if __name__ == "__main__":
-    asyncio.run(listen_for_updates())
+    root = tk.Tk()
+    app = MonopolyUI(root)
+    asyncio.run(websocket_listener())
+    root.mainloop()
