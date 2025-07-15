@@ -1,34 +1,57 @@
 import random
-from dataclasses import dataclass
-from typing import Callable, List
-from game import Game, Player
+from dataclasses import dataclass, field
+from typing import List
+#from game import Game, Player
 
 # —————— Data Model ——————
 @dataclass
 class ChanceCard:
     name: str
     description: str
-    action: Callable[['Player', 'Game'], None]
+    action: str
 
-    def apply(self, player: 'Player', game: 'Game') -> None:
-        """Execute this card’s effect."""
-        self.action(player, game)
 
+def build_chance_deck() -> List[ChanceCard]:
+    return [
+        ChanceCard("ADVANCE_TO_GO", "Advance to Go (Collect $200)", "advance_to_go"),
+        ChanceCard("ADVANCE_TO_ILLINOIS", "Advance to Illinois Avenue", "advance_to_illinois"),
+        ChanceCard("ADVANCE_TO_ST_CHARLES", "Advance to St. Charles Place", "advance_to_st_charles"),
+        ChanceCard("ADVANCE_TO_NEAREST_UTILITY", "Advance to Nearest Utility", "advance_to_nearest_utility"),
+        ChanceCard("ADVANCE_TO_NEAREST_RAILROAD", "Advance to Nearest Railroad", "advance_to_nearest_railroad"),
+        ChanceCard("ADVANCE_TO_NEAREST_RAILROAD_2", "Advance to Nearest Railroad (2nd)", "advance_to_nearest_railroad"),
+        ChanceCard("BANK_DIVIDEND", "Bank pays you dividend of $50", "bank_dividend"),
+        ChanceCard("GET_OUT_OF_JAIL_FREE", "Get Out of Jail Free", "get_out_of_jail_free"),
+        ChanceCard("GO_BACK_THREE_SPACES", "Go back three spaces", "go_back_three_spaces"),
+        ChanceCard("GO_TO_JAIL", "Go directly to Jail", "go_to_jail"),
+        ChanceCard("GENERAL_REPAIRS", "Make general repairs on all your property", "general_repairs"),
+        ChanceCard("POOR_TAX", "Pay poor tax of $15", "poor_tax"),
+        ChanceCard("TRIP_TO_READING", "Take a trip to Reading Railroad", "trip_to_reading"),
+        ChanceCard("WALK_ON_BOARDWALK", "Take a walk on Boardwalk", "walk_on_boardwalk"),
+        ChanceCard("CHAIRMAN_OF_THE_BOARD", "Elected Chairman of the Board—Pay each player $50", "chairman_of_the_board"),
+        ChanceCard("BUILDING_LOAN_MATURES", "Your building loan matures—Collect $150", "building_loan_matures"),
+    ]
+    
 
 # —————— Deck Management ——————
+@dataclass
 class ChanceDeck:
-    def __init__(self, cards: List[ChanceCard]):
-        # Work on a copy so the original list stays intact
-        self.cards = cards.copy()
+    cards: List[ChanceCard] = field(default_factory=build_chance_deck)
 
+    
     def shuffle_deck(self) -> None:
         random.shuffle(self.cards)
 
     def draw_card(self) -> ChanceCard:
         card = self.cards.pop(0)
-        # “Get Out of Jail Free” isn’t returned to the bottom until used
+        print(f"🔹 Drew: {card.name}")
+    
         if card.name != "GET_OUT_OF_JAIL_FREE":
             self.cards.append(card)
+            print(f"Returned to bottom: {card.name}")
+        else:
+            print(f"Held out: {card.name}")
+            print("You get to keep this card.")
+
         return card
 
 
@@ -102,39 +125,12 @@ def building_loan_matures(player, game):
 
 
 # —————— Build & Use the Deck ——————
-def build_chance_deck() -> ChanceDeck:
-    cards = [
-        ChanceCard("ADVANCE_TO_GO", "Advance to Go (Collect $200)", advance_to_go),
-        ChanceCard("ADVANCE_TO_ILLINOIS", "Advance to Illinois Avenue", advance_to_illinois),
-        ChanceCard("ADVANCE_TO_ST_CHARLES", "Advance to St. Charles Place", advance_to_st_charles),
-        ChanceCard("ADVANCE_TO_NEAREST_UTILITY", "Advance to Nearest Utility", advance_to_nearest_utility),
-        ChanceCard("ADVANCE_TO_NEAREST_RAILROAD", "Advance to Nearest Railroad", advance_to_nearest_railroad),
-        ChanceCard("ADVANCE_TO_NEAREST_RAILROAD_2", "Advance to Nearest Railroad (2nd)", advance_to_nearest_railroad),
-        ChanceCard("BANK_DIVIDEND", "Bank pays you dividend of $50", bank_dividend),
-        ChanceCard("GET_OUT_OF_JAIL_FREE", "Get Out of Jail Free", get_out_of_jail_free),
-        ChanceCard("GO_BACK_THREE_SPACES", "Go back three spaces", go_back_three_spaces),
-        ChanceCard("GO_TO_JAIL", "Go directly to Jail", go_to_jail),
-        ChanceCard("GENERAL_REPAIRS", "Make general repairs on all your property", general_repairs),
-        ChanceCard("POOR_TAX", "Pay poor tax of $15", poor_tax),
-        ChanceCard("TRIP_TO_READING", "Take a trip to Reading Railroad", trip_to_reading),
-        ChanceCard("WALK_ON_BOARDWALK", "Take a walk on Boardwalk", walk_on_boardwalk),
-        ChanceCard("CHAIRMAN_OF_THE_BOARD", "Elected Chairman of the Board—Pay each player $50", chairman_of_the_board),
-        ChanceCard("BUILDING_LOAN_MATURES", "Your building loan matures—Collect $150", building_loan_matures),
-    ]
-    deck = ChanceDeck(cards)
-    deck.shuffle_deck()
-    return deck
-
-
 # Example of usage inside your game loop:
 if __name__ == "__main__":
-    # Assume you have a Game and Player classes defined elsewhere:
-    from game import Game, Player
+    deck = ChanceDeck()
+    deck.shuffle_deck()
 
-    game_controller = Game([...])
-    current_player = game_controller.current_player
-
-    chance_deck = build_chance_deck()
-    drawn_card = chance_deck.draw_card()
-    print(f"You drew: {drawn_card.description}")
-    drawn_card.apply(current_player, game_controller)
+    # Simulate landing on a Chance tile
+    drawn_card = deck.draw_card()
+    print(f"You drew: {drawn_card.name} — {drawn_card.description}")
+    
