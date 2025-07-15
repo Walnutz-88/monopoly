@@ -9,8 +9,6 @@ import subprocess
 from properties import RegularProperty, RailroadProperty, UtilityProperty, ChestChanceSpace, SpecialSpace
 from dice import Die, DieSet
 from Jiayi.player import Player
-import asyncio
-from typing import List
 
 r = redis.Redis(host="ai.thewcl.com", port=6379, db=3, password="atmega328")
 REDIS_KEY = "monopoly:game_state"
@@ -575,16 +573,6 @@ class MonopolyBoard:
 
     def save_to_redis(self):
         r.json().set(REDIS_KEY, Path.root_path(), self.to_dict())
-        # Broadcast game state update to all connected WebSocket clients
-        asyncio.create_task(self.broadcast_game_state())
-    
-    async def broadcast_game_state(self):
-        """Broadcast current game state to all connected WebSocket clients"""
-        game_state = self.to_dict()
-        await manager.broadcast(json.dumps({
-            "type": "game_state_update",
-            "data": game_state
-        }))
 
     @classmethod
     def load_from_redis(cls):
@@ -695,31 +683,6 @@ def post_purchase_decision(req: PurchaseDecisionRequest):
 class ResetRequest(BaseModel):
     num_players: int
 
-@app.websocket("/ws")
-async def websocket_endpoint(websocket: WebSocket):
-    await manager.connect(websocket)
-    try:
-        # Send initial game state
-        board = MonopolyBoard.load_from_redis()
-        await manager.send_personal_message(json.dumps({
-            "type": "game_state_update",
-            "data": board.to_dict()
-        }), websocket)
-        
-        while True:
-            # Keep connection alive and handle any incoming messages
-            data = await websocket.receive_text()
-            # Handle incoming WebSocket messages if needed
-            message = json.loads(data)
-            if message.get("type") == "request_game_state":
-                board = MonopolyBoard.load_from_redis()
-                await manager.send_personal_message(json.dumps({
-                    "type": "game_state_update",
-                    "data": board.to_dict()
-                }), websocket)
-    except WebSocketDisconnect:
-        manager.disconnect(websocket)
-
 @app.post("/reset")
 def post_reset(req: ResetRequest):
     # Validate number of players
@@ -736,5 +699,9 @@ def post_reset(req: ResetRequest):
     board = MonopolyBoard(players)
     board.reset(player_names)
     
-    # Launch player engine windows for each player (macOS only)
+    return {"success": True, "message": f"Game reset with {num_players} players", "players": player_names}
 
+
+if __name__ == "__main__":
+    import uvicorn
+    uvicorn.run(app, host="0.0.0.0", port=8000)
