@@ -5,6 +5,7 @@ import redis
 from redis.commands.json.path import Path
 import json
 import ipdb
+import subprocess
 from properties import RegularProperty, RailroadProperty, UtilityProperty, ChestChanceSpace, SpecialSpace
 from dice import Die, DieSet
 from Jiayi.player import Player
@@ -263,8 +264,9 @@ class MonopolyBoard:
     utility_properties: list[UtilityProperty] = field(default_factory=list)
     chance_and_chest_spaces: list[ChestChanceSpace] = field(default_factory=list)
     other_spaces: list[SpecialSpace] = field(default_factory=list)
-    state: str = "is_playing"  # is_playing, has_winner
+    state: str = "is_playing"  # is_playing, has_winner, awaiting_purchase_decision
     player_turn: int = 0
+    pending_purchase: dict = field(default_factory=dict)  # For storing pending purchase decisions
     
     def is_my_turn(self, player: str) -> bool:
         return self.state == "is_playing" and player == self.players[self.player_turn].name
@@ -343,17 +345,20 @@ class MonopolyBoard:
         if not self.is_my_turn(player):
             return {"success": False, "message": f"It is not {player}'s turn."} 
         
-        print (f"{player} is rolling the dice...")
-        print (f"{player} is on {self.players[self.player_turn].position}.")
+        current_player = self.players[self.player_turn]
+        
         die_set = DieSet(Die(), Die())
         roll = die_set.roll_twice()
-        self.players[self.player_turn].move(roll[2])
-        print (f"{player} rolled a {roll[2]}.")
-        print (f"{player} is now on {self.players[self.player_turn].position}.")
+        current_player.move(roll[2])
         
         # Get space details for the position the player landed on
-        current_position = self.players[self.player_turn].position
+        current_position = current_player.position
         space_details = self.get_space_details(current_position)
+        
+        # Handle property transactions
+        transaction_message = ""
+        if space_details["type"] in ["regular_property", "railroad_property", "utility_property"]:
+            transaction_message = self._handle_property_transaction(current_player, space_details)
         
         # Advance to next player's turn
         self.player_turn = (self.player_turn + 1) % len(self.players)
@@ -361,10 +366,137 @@ class MonopolyBoard:
         self.save_to_redis()
         return {
             "success": True, 
-            "message": f"{player} rolled {roll[2]} and moved to position {current_position}.", 
+            "message": f"{player} rolled {roll[2]} and moved to position {current_position}. {transaction_message}", 
             "board": self.to_dict(),
             "space_details": space_details
         }
+    def _handle_property_transaction(self, current_player: Player, space_details: dict) -> str:
+        """Handle property buying or rent payment when a player lands on a property."""
+        property_name = space_details["name"]
+        owner = space_details["owner"]
+        
+        # If property is unowned, indicate that a purchase decision is needed
+        if owner is None:
+            buy_price = space_details["buy_price"]
+            if current_player.money >= buy_price:
+                return f"Can buy {property_name} for ${buy_price}."
+            else:
+                return f"Cannot afford {property_name} (${buy_price})."
+            
+        # If property is owned by another player, pay rent
+        elif owner != current_player.name:
+            rent_amount = self._calculate_rent(space_details)
+            current_player.pay(rent_amount)
+            
+            # Find the owner and pay them rent
+            for player in self.players:
+                if player.name == owner:
+                    player.receive(rent_amount)
+                    break
+            
+            return f"Paid ${rent_amount} rent to {owner} for {property_name}."
+        
+        # Player owns the property
+        else:
+            return f"Landed on own property: {property_name}."
+    
+    def handle_property_purchase(self, player_name: str, property_position: int, decision: str) -> dict:
+        """Handle a property purchase decision made by a player."""
+        # Find the player
+        player = None
+        for p in self.players:
+            if p.name == player_name:
+                player = p
+                break
+        
+        if not player:
+            return {"success": False, "message": "Player not found"}
+        
+        # Get space details
+        space_details = self.get_space_details(property_position)
+        
+        if space_details["owner"] is not None:
+            return {"success": False, "message": "Property is already owned"}
+        
+        if decision.lower() == 'y':
+            buy_price = space_details["buy_price"]
+            if player.money >= buy_price:
+                player.pay(buy_price)
+                self._set_property_owner(space_details, player_name)
+                self.save_to_redis()
+                print(f"{player_name} bought {space_details['name']} for ${buy_price}")
+                return {"success": True, "message": f"Bought {space_details['name']} for ${buy_price}"}
+            else:
+                return {"success": False, "message": "Insufficient funds"}
+        else:
+            print(f"{player_name} chose not to buy {space_details['name']}")
+            return {"success": True, "message": f"Chose not to buy {space_details['name']}"}
+    
+    def _simulate_property_purchase_choice(self, player_name: str, property_name: str, buy_price: int) -> str:
+        """Store purchase decision state and return 'pending' to indicate waiting for user input."""
+        print(f"\n{player_name}, would you like to buy {property_name} for ${buy_price}? (y/n)")
+        
+        # Store the pending purchase decision in the board state
+        self.pending_purchase = {
+            "player": player_name,
+            "property": property_name,
+            "price": buy_price,
+            "position": self.players[self.player_turn].position
+        }
+        self.state = "awaiting_purchase_decision"
+        
+        print(f"Waiting for {player_name} to make a purchase decision...")
+        return "pending"
+    
+    def _set_property_owner(self, space_details: dict, owner_name: str):
+        """Set the owner of a property based on its type and position."""
+        position = space_details["position"]
+        
+        if space_details["type"] == "regular_property":
+            for prop in self.regular_properties:
+                if prop.position == position:
+                    prop.owner = owner_name
+                    break
+        elif space_details["type"] == "railroad_property":
+            for prop in self.railroad_properties:
+                if prop.position == position:
+                    prop.owner = owner_name
+                    break
+        elif space_details["type"] == "utility_property":
+            for prop in self.utility_properties:
+                if prop.position == position:
+                    prop.owner = owner_name
+                    break
+    
+    def _calculate_rent(self, space_details: dict) -> int:
+        """Calculate rent for a property based on its type and ownership."""
+        if space_details["type"] == "regular_property":
+            # For regular properties, rent is based on house count (index 0 for no houses)
+            rent_prices = space_details["rent_price"]
+            return rent_prices[0]  # Basic rent with no houses
+        
+        elif space_details["type"] == "railroad_property":
+            # For railroads, rent depends on how many railroads the owner has
+            owner = space_details["owner"]
+            railroads_owned = sum(1 for prop in self.railroad_properties if prop.owner == owner)
+            rent_prices = space_details["rent_price"]
+            # Rent index: 0 for 1 railroad, 1 for 2 railroads, etc.
+            return rent_prices[min(railroads_owned - 1, len(rent_prices) - 1)]
+        
+        elif space_details["type"] == "utility_property":
+            # For utilities, rent is based on dice roll multiplier
+            owner = space_details["owner"]
+            utilities_owned = sum(1 for prop in self.utility_properties if prop.owner == owner)
+            rent_multiplier = space_details["rent_price"]
+            
+            # If owner has 1 utility, multiply dice roll by 4; if 2 utilities, multiply by 10
+            multiplier = rent_multiplier[0] if utilities_owned == 1 else rent_multiplier[1]
+            
+            # For simplicity, assume a dice roll of 7 (average)
+            # In a real game, you'd use the actual dice roll
+            return 7 * multiplier
+        
+        return 0
     
     def reset(self, new_players: list[str]):
         self.state = "is_playing"
@@ -465,7 +597,8 @@ class MonopolyBoard:
             chance_and_chest_spaces=chance_and_chest_spaces,
             other_spaces=other_spaces,
             state=data.get('state', 'is_playing'),
-            player_turn=data.get('player_turn', 0)
+            player_turn=data.get('player_turn', 0),
+            pending_purchase=data.get('pending_purchase', {})
         )
 
     def to_dict(self):
@@ -503,10 +636,56 @@ def post_move(req: MoveRequest):
     return result
 
 
+
+
+class PurchaseDecisionRequest(BaseModel):
+    player: str
+    position: int
+    decision: str  # 'y' or 'n'
+
+
+@app.post("/purchase")
+def post_purchase_decision(req: PurchaseDecisionRequest):
+    board = MonopolyBoard.load_from_redis()
+    result = board.handle_property_purchase(req.player, req.position, req.decision)
+    
+    if not result["success"]:
+        raise HTTPException(status_code=400, detail=result["message"])
+    
+    return result
+
+
 @app.post("/reset")
 def post_reset():
-    player1 = Player(name="Player 1", token="token_1")
-    player2 = Player(name="Player 2", token="token_2")
-    board = MonopolyBoard([player1, player2])
-    board.reset(["Player 1", "Player 2"])
-    return {"message": "Game reset", "board": board.to_dict()}
+    # Prompt for number of players
+    while True:
+        try:
+            num_players = int(input("How many players? (2-6): "))
+            if 2 <= num_players <= 6:
+                break
+            else:
+                print("Please enter a number between 2 and 6.")
+        except ValueError:
+            print("Please enter a valid number.")
+    
+    # Create the specified number of players
+    player_names = [f"Player {i+1}" for i in range(num_players)]
+    players = [Player(name=name, token=f"token_{i+1}") for i, name in enumerate(player_names)]
+    
+    # Create board and reset with the new players
+    board = MonopolyBoard(players)
+    board.reset(player_names)
+    
+    # Launch player engine windows for each player (macOS only)
+    try:
+        for i in range(1, num_players + 1):
+            subprocess.Popen([
+                "osascript", "-e", 
+                f'tell application "Terminal" to do script "cd {subprocess.check_output(["pwd"], text=True).strip()} && uv run player_engine.py --player {i}"'
+            ])
+        print(f"Launched {num_players} player engine windows")
+    except Exception as e:
+        print(f"Error launching player engines: {e}")
+        print("You can manually run: uv run player_engine.py --player X (where X is 1, 2, etc.)")
+    
+    return {"message": f"Game reset with {num_players} players", "board": board.to_dict()}

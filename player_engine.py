@@ -80,6 +80,27 @@ async def post_move(player):
         return response
 
 
+async def post_purchase_decision(player, position, decision):
+    async with httpx.AsyncClient() as client:
+        response = await client.post(
+            f"{BASE_URL}/purchase", json={"player": player, "position": position, "decision": decision}
+        )
+        return response
+
+
+async def get_user_purchase_decision(message):
+    """Get user's purchase decision (y/n)"""
+    def input_thread():
+        while True:
+            decision = input(f"{message} (y/n): ").strip().lower()
+            if decision in ['y', 'n']:
+                return decision
+            print("Please enter 'y' for yes or 'n' for no.")
+    
+    loop = asyncio.get_event_loop()
+    return await loop.run_in_executor(None, input_thread)
+
+
 async def wait_for_user_input(message="\nPress Enter to continue..."):
     """Wait for user to press Enter to continue"""
     def input_thread():
@@ -129,6 +150,39 @@ async def handle_board_state(websocket, wait_for_start=False, publish_update=Tru
                 space_details = result.get("space_details")
                 if space_details:
                     print("Space Details:", space_details)
+                
+                # Check if this is a property that can be bought
+                if (space_details and 
+                    space_details.get("type") in ["regular_property", "railroad_property", "utility_property"] and
+                    space_details.get("owner") is None and
+                    result.get("message", "").startswith(f"{player_name} rolled") and
+                    "Can buy" in result.get("message", "")):
+                    
+                    property_name = space_details.get("name")
+                    buy_price = space_details.get("buy_price")
+                    current_position = space_details.get("position")
+                    
+                    # Ask for purchase decision
+                    if not args.auto:
+                        decision = await get_user_purchase_decision(f"Do you want to buy {property_name} for ${buy_price}?")
+                    else:
+                        # Auto mode - make a simple decision based on price
+                        decision = "y" if buy_price <= 200 else "n"
+                        print(f"Auto decision: {decision} for {property_name} at ${buy_price}")
+                    
+                    # Send the purchase decision
+                    purchase_response = await post_purchase_decision(player_name, current_position, decision)
+                    
+                    if purchase_response.status_code == 200:
+                        try:
+                            purchase_result = purchase_response.json()
+                            print(purchase_result.get("message", ""))
+                        except json.JSONDecodeError as e:
+                            print(f"Failed to parse JSON response from /purchase: {e}")
+                            print(f"Raw response: {purchase_response.text}")
+                    else:
+                        print(f"Purchase decision failed with status {purchase_response.status_code}: {purchase_response.text}")
+                
                 # Only publish update if explicitly requested (for auto mode or after manual turn end)
                 if publish_update:
                     await r.publish(redisPubSubKey, "update")
@@ -140,7 +194,7 @@ async def handle_board_state(websocket, wait_for_start=False, publish_update=Tru
         else:
             print(f"Move failed with status {response.status_code}: {response.text}")
     else:
-        print("Waiting for the other player...")
+        print(f"It's Player {current_turn_player}'s turn")
 
     await send_positions_over_websocket(websocket)
     return False  # Return False to indicate we didn't make a move
