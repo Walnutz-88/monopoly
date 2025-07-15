@@ -675,15 +675,4 @@ def post_reset(req: ResetRequest):
     board.reset(player_names)
     
     # Launch player engine windows for each player (macOS only)
-    try:
-        for i in range(1, num_players + 1):
-            subprocess.Popen([
-                "osascript", "-e", 
-                f'tell application "Terminal" to do script "cd {subprocess.check_output(["pwd"], text=True).strip()} && uv run player_engine.py --player {i}"'
-            ])
-        print(f"Launched {num_players} player engine windows")
-    except Exception as e:
-        print(f"Error launching player engines: {e}")
-        print("You can manually run: uv run player_engine.py --player X (where X is 1, 2, etc.)")
-    
-    return {"message": f"Game reset with {num_players} players", "board": board.to_dict()}
+
