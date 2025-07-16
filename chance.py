@@ -41,18 +41,40 @@ class ChanceDeck:
     def shuffle_deck(self) -> None:
         random.shuffle(self.cards)
 
-    def draw_card(self) -> ChanceCard:
+    def draw_card(self) -> tuple[ChanceCard, bool]:
+        """Draw a card from the deck. Returns (card, keep_card)"""
         card = self.cards.pop(0)
-        print(f"🔹 Drew: {card.name}")
-    
-        if card.name != "GET_OUT_OF_JAIL_FREE":
+        keep_card = card.name == "GET_OUT_OF_JAIL_FREE"
+        
+        if not keep_card:
             self.cards.append(card)
-            print(f"Returned to bottom: {card.name}")
-        else:
-            print(f"Held out: {card.name}")
-            print("You get to keep this card.")
-
-        return card
+        
+        return card, keep_card
+    
+    def to_dict(self) -> dict:
+        """Convert deck to dictionary for serialization."""
+        return {
+            "cards": [{
+                "name": card.name,
+                "description": card.description,
+                "action": card.action
+            } for card in self.cards]
+        }
+    
+    @classmethod
+    def from_dict(cls, data: dict) -> 'ChanceDeck':
+        """Create deck from dictionary."""
+        cards = [ChanceCard(
+            name=card_data["name"],
+            description=card_data["description"],
+            action=card_data["action"]
+        ) for card_data in data.get("cards", [])]
+        
+        # If no cards data, create default deck
+        if not cards:
+            cards = build_chance_deck()
+        
+        return cls(cards=cards)
 
 
 # —————— Action Functions ——————

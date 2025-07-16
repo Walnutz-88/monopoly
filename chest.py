@@ -11,7 +11,7 @@ class ChestCard:
     action: str
 
 
-def build_chance_deck() -> List[ChestCard]:
+def build_chest_deck() -> List[ChestCard]:
     return [
         ChestCard("ADVANCE_TO_GO", "Advance to Go (Collect $200)", "advance_to_go"),
         ChestCard("BANK_ERROR_IN_YOUR_FAVOR", "Bank error in your favor — Collect $200", "bank_error"),
@@ -35,24 +35,46 @@ def build_chance_deck() -> List[ChestCard]:
 # —————— Deck Management ——————
 @dataclass
 class ChestDeck:
-    cards: List[ChestCard] = field(default_factory=build_chance_deck)
+    cards: List[ChestCard] = field(default_factory=build_chest_deck)
 
     
     def shuffle_deck(self) -> None:
         random.shuffle(self.cards)
 
-    def draw_card(self) -> ChestCard:
+    def draw_card(self) -> tuple[ChestCard, bool]:
+        """Draw a card from the deck. Returns (card, keep_card)"""
         card = self.cards.pop(0)
-        print(f"🔹 Drew: {card.name}")
-    
-        if card.name != "GET_OUT_OF_JAIL_FREE":
+        keep_card = card.name == "GET_OUT_OF_JAIL_FREE"
+        
+        if not keep_card:
             self.cards.append(card)
-            print(f"Returned to bottom: {card.name}")
-        else:
-            print(f"Held out: {card.name}")
-            print("You get to keep this card.")
-
-        return card
+        
+        return card, keep_card
+    
+    def to_dict(self) -> dict:
+        """Convert deck to dictionary for serialization."""
+        return {
+            "cards": [{
+                "name": card.name,
+                "description": card.description,
+                "action": card.action
+            } for card in self.cards]
+        }
+    
+    @classmethod
+    def from_dict(cls, data: dict) -> 'ChestDeck':
+        """Create deck from dictionary."""
+        cards = [ChestCard(
+            name=card_data["name"],
+            description=card_data["description"],
+            action=card_data["action"]
+        ) for card_data in data.get("cards", [])]
+        
+        # If no cards data, create default deck
+        if not cards:
+            cards = build_chest_deck()
+        
+        return cls(cards=cards)
 
 
 # —————— Action Functions ——————

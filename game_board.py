@@ -8,7 +8,9 @@ import ipdb
 import subprocess
 from properties import RegularProperty, RailroadProperty, UtilityProperty, ChestChanceSpace, SpecialSpace
 from dice import Die, DieSet
-from Jiayi.player import Player
+from player import Player
+from chest import ChestDeck, ChestCard
+from chance import ChanceDeck, ChanceCard
 
 r = redis.Redis(host="ai.thewcl.com", port=6379, db=3, password="atmega328")
 REDIS_KEY = "monopoly:game_state"
@@ -267,6 +269,8 @@ class MonopolyBoard:
     state: str = "is_playing"  # is_playing, has_winner, awaiting_purchase_decision
     player_turn: int = 0
     pending_purchase: dict = field(default_factory=dict)  # For storing pending purchase decisions
+    chance_deck: ChanceDeck = field(default_factory=ChanceDeck)
+    chest_deck: ChestDeck = field(default_factory=ChestDeck)
     
     def is_my_turn(self, player: str) -> bool:
         return self.state == "is_playing" and player == self.players[self.player_turn].name
@@ -613,12 +617,30 @@ class MonopolyBoard:
         space_name = space_details["name"]
         
         if space_name == "Chance":
-            # TODO: Implement Chance card drawing
-            return "Landed on Chance! Draw a Chance card. (Not implemented yet)"
+            # Draw a Chance card
+            card, keep_card = self.chance_deck.draw_card()
+            
+            # If it's a "Get Out of Jail Free" card, add it to the player's collection
+            if keep_card:
+                current_player.get_out_of_jail_free_cards += 1
+                return f"Landed on Chance! Drew: {card.description}. Card kept for future use."
+            else:
+                # Execute the card's action
+                self._execute_chance_action(card.action, current_player)
+                return f"Landed on Chance! Drew: {card.description}."
         
         elif space_name == "Community Chest":
-            # TODO: Implement Community Chest card drawing
-            return "Landed on Community Chest! Draw a Community Chest card. (Not implemented yet)"
+            # Draw a Community Chest card
+            card, keep_card = self.chest_deck.draw_card()
+            
+            # If it's a "Get Out of Jail Free" card, add it to the player's collection
+            if keep_card:
+                current_player.get_out_of_jail_free_cards += 1
+                return f"Landed on Community Chest! Drew: {card.description}. Card kept for future use."
+            else:
+                # Execute the card's action
+                self._execute_chest_action(card.action, current_player)
+                return f"Landed on Community Chest! Drew: {card.description}."
         
         return f"Landed on {space_name}."
     
@@ -630,6 +652,87 @@ class MonopolyBoard:
         # If owner has 1 utility, multiply dice roll by 4; if 2 utilities, multiply by 10
         multiplier = 4 if utilities_owned == 1 else 10
         return dice_roll * multiplier
+    
+    def _execute_chance_action(self, action: str, player: Player):
+        """Execute a chance card action based on the action string."""
+        if action == "advance_to_go":
+            player.position = 0
+            player.receive(200)
+        elif action == "bank_dividend":
+            player.receive(50)
+        elif action == "poor_tax":
+            player.pay(15)
+        elif action == "building_loan_matures":
+            player.receive(150)
+        elif action == "go_to_jail":
+            player.go_to_jail()
+        elif action == "chairman_of_the_board":
+            # Pay each other player $50
+            for other_player in self.players:
+                if other_player != player:
+                    other_player.receive(50)
+                    player.pay(50)
+        elif action == "general_repairs":
+            # Pay $25 per house and $100 per hotel
+            # This is a simplified implementation - in a full game you'd track houses/hotels
+            repair_cost = 0  # Would calculate based on actual properties owned
+            player.pay(repair_cost)
+        elif action == "go_back_three_spaces":
+            new_position = (player.position - 3) % 40
+            player.position = new_position
+        # Add more chance card actions as needed
+        else:
+            # For actions not implemented yet, just log it
+            print(f"Chance action '{action}' not implemented yet")
+    
+    def _execute_chest_action(self, action: str, player: Player):
+        """Execute a community chest card action based on the action string."""
+        if action == "advance_to_go":
+            player.position = 0
+            player.receive(200)
+        elif action == "bank_error":
+            player.receive(200)
+        elif action == "doctor_fees":
+            player.pay(50)
+        elif action == "sale_of_stock":
+            player.receive(50)
+        elif action == "go_to_jail":
+            player.go_to_jail()
+        elif action == "opera_night":
+            # Collect $50 from every other player
+            for other_player in self.players:
+                if other_player != player:
+                    other_player.pay(50)
+                    player.receive(50)
+        elif action == "holiday_fund":
+            player.receive(100)
+        elif action == "income_tax_refund":
+            player.receive(20)
+        elif action == "birthday":
+            # Collect $10 from every other player
+            for other_player in self.players:
+                if other_player != player:
+                    other_player.pay(10)
+                    player.receive(10)
+        elif action == "life_insurance_matures":
+            player.receive(100)
+        elif action == "hospital_fees":
+            player.pay(100)
+        elif action == "school_fees":
+            player.pay(150)
+        elif action == "consultancy_fee":
+            player.receive(25)
+        elif action == "street_repairs":
+            # Pay $40 per house and $115 per hotel
+            # This is a simplified implementation - in a full game you'd track houses/hotels
+            repair_cost = 0  # Would calculate based on actual properties owned
+            player.pay(repair_cost)
+        elif action == "beauty_contest":
+            player.receive(10)
+        # Add more chest card actions as needed
+        else:
+            # For actions not implemented yet, just log it
+            print(f"Chest action '{action}' not implemented yet")
     
     def reset(self, new_players: list[str]):
         self.state = "is_playing"
@@ -702,6 +805,10 @@ class MonopolyBoard:
                 )
                 self.other_spaces.append(prop)
         
+        # Shuffle the chance and chest decks to randomize card order
+        self.chance_deck.shuffle_deck()
+        self.chest_deck.shuffle_deck()
+        
         self.save_to_redis()
 
     def save_to_redis(self):
@@ -722,6 +829,11 @@ class MonopolyBoard:
         utility_properties = [UtilityProperty(**prop_data) for prop_data in data.get('utility_properties', [])]
         chance_and_chest_spaces = [ChestChanceSpace(**prop_data) for prop_data in data.get('chance_and_chest_spaces', [])]
         other_spaces = [SpecialSpace(**prop_data) for prop_data in data.get('other_spaces', [])]
+        
+        # Deserialize deck states
+        chance_deck = ChanceDeck.from_dict(data.get('chance_deck', {})) if data.get('chance_deck') else ChanceDeck()
+        chest_deck = ChestDeck.from_dict(data.get('chest_deck', {})) if data.get('chest_deck') else ChestDeck()
+        
         return cls(
             players=players,
             regular_properties=regular_properties,
@@ -731,11 +843,17 @@ class MonopolyBoard:
             other_spaces=other_spaces,
             state=data.get('state', 'is_playing'),
             player_turn=data.get('player_turn', 0),
-            pending_purchase=data.get('pending_purchase', {})
+            pending_purchase=data.get('pending_purchase', {}),
+            chance_deck=chance_deck,
+            chest_deck=chest_deck
         )
 
     def to_dict(self):
-        return asdict(self)
+        result = asdict(self)
+        # Serialize deck states
+        result['chance_deck'] = self.chance_deck.to_dict()
+        result['chest_deck'] = self.chest_deck.to_dict()
+        return result
 
     def serialize(self):
         return json.dumps(self.to_dict())
