@@ -119,6 +119,58 @@ class Player:
             return True
         return False
 
+    def attempt_jail_roll(self, die1: int, die2: int) -> tuple[bool, str]:
+        """
+        Attempt to get out of jail by rolling doubles or after 3 turns.
+        
+        Args:
+            die1: First die value
+            die2: Second die value
+            
+        Returns:
+            tuple[bool, str]: (success, message)
+        """
+        if not self.in_jail:
+            return False, "Player is not in jail"
+        
+        self.jail_turns += 1
+        
+        # Check if rolled doubles
+        if die1 == die2:
+            self.in_jail = False
+            self.jail_turns = 0
+            return True, f"Rolled doubles ({die1}, {die2})! Got out of jail and can move {die1 + die2} spaces."
+        
+        # Check if it's been 3 turns
+        if self.jail_turns >= 3:
+            # Must pay $50 fine and get out
+            if self.pay(50):
+                self.in_jail = False
+                self.jail_turns = 0
+                return True, f"Paid $50 fine after 3 turns in jail. Can move {die1 + die2} spaces."
+            else:
+                # Player went bankrupt paying the fine
+                return False, "Player went bankrupt trying to pay jail fine."
+        
+        # Still in jail
+        return False, f"Failed to roll doubles. Turn {self.jail_turns} of 3 in jail."
+
+    def pay_jail_fine(self) -> bool:
+        """
+        Pay $50 fine to get out of jail immediately.
+        
+        Returns:
+            bool: True if payment succeeded and player is out of jail.
+        """
+        if not self.in_jail:
+            return False
+        
+        if self.pay(50):
+            self.in_jail = False
+            self.jail_turns = 0
+            return True
+        return False
+
     def declare_bankruptcy(self) -> None:
         """
         Mark the player as bankrupt and clear assets.

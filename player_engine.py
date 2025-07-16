@@ -132,6 +132,43 @@ async def wait_for_user_input(message="\nPress Enter to continue..."):
     await loop.run_in_executor(None, input_thread)
 
 
+async def display_current_player_money():
+    """Display the current player's money and owned properties"""
+    board = await get_board()
+    if board and board.get("players"):
+        player_index = int(i_am_playing) - 1  # Convert to 0-based index
+        if 0 <= player_index < len(board["players"]):
+            player_money = board["players"][player_index]["money"]
+            print(f"\n💰 You currently have ${player_money}")
+            
+            # Display owned properties
+            owned_properties = []
+            
+            # Check regular properties
+            for prop in board.get("regular_properties", []):
+                if prop.get("owner") == f"Player {i_am_playing}":
+                    houses = prop.get("house_count", 0)
+                    house_info = f" ({houses} houses)" if houses > 0 else ""
+                    owned_properties.append(f"  📋 {prop['name']} ({prop['color']}){house_info}")
+            
+            # Check railroad properties
+            for prop in board.get("railroad_properties", []):
+                if prop.get("owner") == f"Player {i_am_playing}":
+                    owned_properties.append(f"  🚂 {prop['name']}")
+            
+            # Check utility properties
+            for prop in board.get("utility_properties", []):
+                if prop.get("owner") == f"Player {i_am_playing}":
+                    owned_properties.append(f"  ⚡ {prop['name']}")
+            
+            if owned_properties:
+                print("\n🏠 Your properties:")
+                for prop in owned_properties:
+                    print(prop)
+            else:
+                print("\n🏠 You don't own any properties yet")
+
+
 async def send_positions_over_websocket(websocket):
     board = await get_board()
     if board is None:
@@ -149,8 +186,6 @@ async def handle_board_state(websocket, wait_for_start=False, publish_update=Tru
     if board is None:
         print("Failed to get board state")
         return False  # Return False to indicate no move was made
-
-    print(json.dumps(board, indent=2))
 
     if board["state"] != "is_playing":
         print("Game over.")
@@ -237,6 +272,7 @@ async def listen_for_updates_manual(websocket):
         i_made_move = await handle_board_state(websocket, wait_for_start=(current_turn_player == i_am_playing), publish_update=False)
         # Second prompt: wait for Enter to end turn after making a move
         if i_made_move and not args.auto:
+            await display_current_player_money()
             await wait_for_user_input("\nPress Enter to end your turn: ")
             # Now publish the update to notify the other player
             await r.publish(redisPubSubKey, "update")
@@ -251,6 +287,7 @@ async def listen_for_updates_manual(websocket):
                     i_made_move = await handle_board_state(websocket, wait_for_start=(current_turn_player == i_am_playing), publish_update=False)
                     # Second prompt: wait for Enter to end turn after making a move
                     if i_made_move and not args.auto:
+                        await display_current_player_money()
                         await wait_for_user_input("\nPress Enter to end your turn: ")
                         # Now publish the update to notify the other player
                         await r.publish(redisPubSubKey, "update")

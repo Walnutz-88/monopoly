@@ -348,17 +348,61 @@ class MonopolyBoard:
         current_player = self.players[self.player_turn]
         
         die_set = DieSet(Die(), Die())
-        roll = die_set.roll_twice()
-        current_player.move(roll[2])
+        die1, die2, total_roll, is_doubles = die_set.roll_and_check_doubles()
         
-        # Get space details for the position the player landed on
+        # Handle jail mechanics
+        if current_player.in_jail:
+            success, jail_message = current_player.attempt_jail_roll(die1, die2)
+            if success:
+                # Player got out of jail, can move normally
+                current_player.move(total_roll)
+                current_position = current_player.position
+                space_details = self.get_space_details(current_position)
+                
+                # Handle property transactions
+                transaction_message = ""
+                if space_details["type"] in ["regular_property", "railroad_property", "utility_property"]:
+                    transaction_message = self._handle_property_transaction(current_player, space_details)
+                
+                # Advance to next player's turn
+                self.player_turn = (self.player_turn + 1) % len(self.players)
+                
+                self.save_to_redis()
+                return {
+                    "success": True, 
+                    "message": f"{player} rolled ({die1}, {die2}). {jail_message} {transaction_message}", 
+                    "board": self.to_dict(),
+                    "space_details": space_details
+                }
+            else:
+                # Player is still in jail
+                # Advance to next player's turn
+                self.player_turn = (self.player_turn + 1) % len(self.players)
+                
+                self.save_to_redis()
+                return {
+                    "success": True, 
+                    "message": f"{player} rolled ({die1}, {die2}). {jail_message}", 
+                    "board": self.to_dict(),
+                    "space_details": self.get_space_details(10)  # Jail position
+                }
+        
+        # Normal move (player not in jail)
+        current_player.move(total_roll)
         current_position = current_player.position
         space_details = self.get_space_details(current_position)
         
-        # Handle property transactions
-        transaction_message = ""
-        if space_details["type"] in ["regular_property", "railroad_property", "utility_property"]:
-            transaction_message = self._handle_property_transaction(current_player, space_details)
+        # Handle special spaces
+        if space_details["name"] == "Go To Jail":
+            current_player.go_to_jail()
+            current_position = current_player.position
+            space_details = self.get_space_details(current_position)
+            transaction_message = "Sent to jail!"
+        else:
+            # Handle property transactions
+            transaction_message = ""
+            if space_details["type"] in ["regular_property", "railroad_property", "utility_property"]:
+                transaction_message = self._handle_property_transaction(current_player, space_details)
         
         # Advance to next player's turn
         self.player_turn = (self.player_turn + 1) % len(self.players)
@@ -366,7 +410,7 @@ class MonopolyBoard:
         self.save_to_redis()
         return {
             "success": True, 
-            "message": f"{player} rolled {roll[2]} and moved to position {current_position}. {transaction_message}", 
+            "message": f"{player} rolled ({die1}, {die2}) = {total_roll} and moved to position {current_position}. {transaction_message}", 
             "board": self.to_dict(),
             "space_details": space_details
         }
@@ -617,7 +661,7 @@ app = FastAPI()
 # WebSocket connection manager
 class ConnectionManager:
     def __init__(self):
-        self.active_connections: List[WebSocket] = []
+        self.active_connections: list[WebSocket] = []
 
     async def connect(self, websocket: WebSocket):
         await websocket.accept()
@@ -679,6 +723,46 @@ def post_purchase_decision(req: PurchaseDecisionRequest):
     
     return result
 
+
+class JailActionRequest(BaseModel):
+    player: str
+    action: str  # 'use_card' or 'pay_fine'
+
+@app.post("/jail_action")
+def post_jail_action(req: JailActionRequest):
+    board = MonopolyBoard.load_from_redis()
+    
+    # Find the player
+    player = None
+    for p in board.players:
+        if p.name == req.player:
+            player = p
+            break
+    
+    if not player:
+        raise HTTPException(status_code=400, detail="Player not found")
+    
+    if not player.in_jail:
+        raise HTTPException(status_code=400, detail="Player is not in jail")
+    
+    if req.action == "use_card":
+        success = player.use_get_out_of_jail_free_card()
+        if success:
+            board.save_to_redis()
+            return {"success": True, "message": f"{req.player} used a Get Out of Jail Free card!"}
+        else:
+            return {"success": False, "message": "No Get Out of Jail Free cards available"}
+    
+    elif req.action == "pay_fine":
+        success = player.pay_jail_fine()
+        if success:
+            board.save_to_redis()
+            return {"success": True, "message": f"{req.player} paid $50 fine and got out of jail!"}
+        else:
+            return {"success": False, "message": "Insufficient funds to pay jail fine"}
+    
+    else:
+        raise HTTPException(status_code=400, detail="Invalid action. Use 'use_card' or 'pay_fine'")
 
 class ResetRequest(BaseModel):
     num_players: int
