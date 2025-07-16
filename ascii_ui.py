@@ -58,14 +58,14 @@ class MonopolyUI:
         
         # Color coding for properties
         self.space_colors = {
-            "Mediterranean Ave": "#8B4513", "Baltic Ave": "#8B4513",
-            "Oriental Ave": "#87CEEB", "Vermont Ave": "#87CEEB", "Connecticut Ave": "#87CEEB",
-            "St. Charles Place": "#FF1493", "States Ave": "#FF1493", "Virginia Ave": "#FF1493",
-            "St. James Place": "#FFA500", "Tennessee Ave": "#FFA500", "New York Ave": "#FFA500",
-            "Kentucky Ave": "#FF0000", "Indiana Ave": "#FF0000", "Illinois Ave": "#FF0000",
-            "Atlantic Ave": "#FFFF00", "Ventnor Ave": "#FFFF00", "Marvin Gardens": "#FFFF00",
-            "Pacific Ave": "#00FF00", "N. Carolina Ave": "#00FF00", "Pennsylvania Ave": "#00FF00",
-            "Park Place": "#0000FF", "Boardwalk": "#0000FF"
+            "Mediterranean Ave": "#5A2F1D", "Baltic Ave": "#5A2F1D",
+            "Oriental Ave": "#4682B4", "Vermont Ave": "#4682B4", "Connecticut Ave": "#4682B4",
+            "St. Charles Place": "#C71585", "States Ave": "#C71585", "Virginia Ave": "#C71585",
+            "St. James Place": "#CD853F", "Tennessee Ave": "#CD853F", "New York Ave": "#CD853F",
+            "Kentucky Ave": "#B22222", "Indiana Ave": "#B22222", "Illinois Ave": "#B22222",
+            "Atlantic Ave": "#BDB76B", "Ventnor Ave": "#BDB76B", "Marvin Gardens": "#BDB76B",
+            "Pacific Ave": "#228B22", "N. Carolina Ave": "#228B22", "Pennsylvania Ave": "#228B22",
+            "Park Place": "#4169E1", "Boardwalk": "#4169E1"
         }
     
     def setup_waiting_screen(self):
@@ -142,11 +142,11 @@ class MonopolyUI:
         """Draw the monopoly board"""
         self.board_canvas.delete("all")
         
-        # Board dimensions
-        board_size = 560
-        cell_size = 56
-        start_x = 20
-        start_y = 20
+        # Board dimensions - 11x11 grid
+        cell_size = 50
+        board_size = 11 * cell_size  # 550 pixels for 11x11 grid
+        start_x = 25
+        start_y = 25
         
         # Draw board outline
         self.board_canvas.create_rectangle(start_x, start_y, start_x + board_size, start_y + board_size, 
@@ -155,27 +155,24 @@ class MonopolyUI:
         # Draw spaces around the board
         self.board_spaces_rects = []
         
-        # Bottom row (0-10)
+        # Bottom row (0-10) - 11 squares with GO at bottom-right corner
         for i in range(11):
-            x = start_x + board_size - (i * cell_size)
+            x = start_x + board_size - ((i+1) * cell_size)
             y = start_y + board_size - cell_size
+            space_idx = i
+            space_name = self.board_spaces[space_idx] if space_idx < len(self.board_spaces) else f"Space {space_idx}"
+            color = self.space_colors.get(space_name, "white")
+            
             rect = self.board_canvas.create_rectangle(x, y, x + cell_size, y + cell_size, 
-                                                    outline="black", width=1)
+                                                    fill=color, outline="black", width=1)
             self.board_spaces_rects.append(rect)
             
-            # Add space name
-            space_name = self.board_spaces[i] if i < len(self.board_spaces) else f"Space {i}"
-            color = self.space_colors.get(space_name, "white")
-            self.board_canvas.create_rectangle(x, y, x + cell_size, y + cell_size, 
-                                             fill=color, outline="black", width=1)
-            
-            # Add text
-            text = space_name[:8] + "..." if len(space_name) > 8 else space_name
+            # Add text with full name
             self.board_canvas.create_text(x + cell_size//2, y + cell_size//2, 
-                                        text=text, font=("Arial", 8), width=cell_size-4)
+                                        text=space_name, font=("Arial", 7), fill="black", width=cell_size-4)
         
-        # Left side (11-20)
-        for i in range(10):
+        # Left side (11-20) - 9 squares (excluding corners)
+        for i in range(9):
             x = start_x
             y = start_y + board_size - cell_size - ((i+1) * cell_size)
             space_idx = i + 11
@@ -186,15 +183,15 @@ class MonopolyUI:
                                                     fill=color, outline="black", width=1)
             self.board_spaces_rects.append(rect)
             
-            text = space_name[:8] + "..." if len(space_name) > 8 else space_name
+            # Add text with full name
             self.board_canvas.create_text(x + cell_size//2, y + cell_size//2, 
-                                        text=text, font=("Arial", 8), width=cell_size-4)
+                                        text=space_name, font=("Arial", 7), fill="black", width=cell_size-4)
         
-        # Top row (21-30)
-        for i in range(10):
-            x = start_x + ((i+1) * cell_size)
+        # Top row (20-30) - 11 squares
+        for i in range(11):
+            x = start_x + (i * cell_size)
             y = start_y
-            space_idx = i + 21
+            space_idx = i + 20
             space_name = self.board_spaces[space_idx] if space_idx < len(self.board_spaces) else f"Space {space_idx}"
             color = self.space_colors.get(space_name, "white")
             
@@ -202,11 +199,11 @@ class MonopolyUI:
                                                     fill=color, outline="black", width=1)
             self.board_spaces_rects.append(rect)
             
-            text = space_name[:8] + "..." if len(space_name) > 8 else space_name
+            # Add text with full name
             self.board_canvas.create_text(x + cell_size//2, y + cell_size//2, 
-                                        text=text, font=("Arial", 8), width=cell_size-4)
+                                        text=space_name, font=("Arial", 7), fill="black", width=cell_size-4)
         
-        # Right side (31-39)
+        # Right side (31-39) - 9 squares (excluding corners)
         for i in range(9):
             x = start_x + board_size - cell_size
             y = start_y + ((i+1) * cell_size)
@@ -218,9 +215,9 @@ class MonopolyUI:
                                                     fill=color, outline="black", width=1)
             self.board_spaces_rects.append(rect)
             
-            text = space_name[:8] + "..." if len(space_name) > 8 else space_name
+            # Add text with full name
             self.board_canvas.create_text(x + cell_size//2, y + cell_size//2, 
-                                        text=text, font=("Arial", 8), width=cell_size-4)
+                                        text=space_name, font=("Arial", 7), fill="black", width=cell_size-4)
         
         # Draw center area
         center_x = start_x + cell_size + 20
@@ -248,10 +245,11 @@ class MonopolyUI:
         # Player colors
         player_colors = ["red", "blue", "green", "yellow", "purple", "orange"]
         
-        board_size = 560
-        cell_size = 56
-        start_x = 20
-        start_y = 20
+        # Use same dimensions as board
+        cell_size = 50
+        board_size = 11 * cell_size
+        start_x = 25
+        start_y = 25
         
         for i, player in enumerate(self.game_state['players']):
             position = player.get('position', 0)
@@ -262,29 +260,31 @@ class MonopolyUI:
             
             # Draw player token
             token_size = 8
-            offset = (i % 3) * 12 + 5  # Offset multiple players on same space
+            # Position players vertically instead of horizontally
+            offset_x = 5
+            offset_y = (i % 6) * 8 + 5  # Vertical offset for multiple players on same space
             
-            self.board_canvas.create_oval(x + offset, y + offset, 
-                                        x + offset + token_size, y + offset + token_size,
+            self.board_canvas.create_oval(x + offset_x, y + offset_y, 
+                                        x + offset_x + token_size, y + offset_y + token_size,
                                         fill=color, outline="black", width=1, tags="player_token")
             
             # Add player number
-            self.board_canvas.create_text(x + offset + token_size//2, y + offset + token_size//2,
+            self.board_canvas.create_text(x + offset_x + token_size//2, y + offset_y + token_size//2,
                                         text=str(i+1), font=("Arial", 6, "bold"), 
                                         fill="white", tags="player_token")
     
     def get_position_coordinates(self, position, start_x, start_y, cell_size, board_size):
         """Get x, y coordinates for a board position"""
-        if position <= 10:  # Bottom row
-            x = start_x + board_size - (position * cell_size)
+        if position <= 10:  # Bottom row (0-10) - GO at bottom-right
+            x = start_x + board_size - ((position + 1) * cell_size)
             y = start_y + board_size - cell_size
-        elif position <= 20:  # Left side
+        elif position <= 19:  # Left side (11-19)
             x = start_x
-            y = start_y + board_size - cell_size - ((position - 10) * cell_size)
-        elif position <= 30:  # Top row
+            y = start_y + board_size - ((position - 10 + 1) * cell_size)
+        elif position <= 30:  # Top row (20-30)
             x = start_x + ((position - 20) * cell_size)
             y = start_y
-        else:  # Right side
+        else:  # Right side (31-39)
             x = start_x + board_size - cell_size
             y = start_y + ((position - 30) * cell_size)
         
@@ -452,28 +452,34 @@ class MonopolyUI:
                     if response.status_code == 200:
                         game_data = response.json()
                         
-                        # Check if game has started (has players and is in playing state)
+                        # Check if game board should be shown (game has been properly reset)
+                        # Game is ready when it has players AND properties (properties are only created during reset)
                         if (game_data.get('players') and 
-                            len(game_data['players']) >= 2 and 
-                            game_data.get('state') == 'is_playing'):
+                            len(game_data['players']) >= 2 and
+                            game_data.get('regular_properties') and 
+                            len(game_data['regular_properties']) > 0):
                             
                             if not self.game_started:
-                                # Game just started, switch to game screen
+                                # Game properly configured, switch to game screen
                                 self.game_started = True
                                 self.root.after(0, self.setup_game_screen)
-                                self.root.after(0, lambda: self.log_message("Game started!"))
+                                self.root.after(0, lambda: self.log_message("Game board loaded! Game configured with players."))
                             
                             # Update game display
                             self.root.after(0, lambda: self.update_game_display(game_data))
                         else:
-                            # Game hasn't started yet, update waiting screen status
+                            # Game hasn't been properly configured yet, update waiting screen status
                             num_players = len(game_data.get('players', []))
-                            if num_players > 0:
-                                status_text = f"Game configured with {num_players} players. Waiting for players to join..."
+                            has_properties = bool(game_data.get('regular_properties'))
+                            
+                            if num_players > 0 and has_properties:
+                                status_text = f"Game configured with {num_players} players. Ready to play!"
                                 # Show player names if available
                                 if game_data.get('players'):
                                     player_names = [p['name'] for p in game_data['players']]
                                     status_text += f"\nPlayers: {', '.join(player_names)}"
+                            elif num_players > 0:
+                                status_text = f"Found {num_players} players, but game needs to be reset first."
                             else:
                                 status_text = "Waiting for game to start..."
                             
