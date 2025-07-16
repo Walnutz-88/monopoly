@@ -355,8 +355,7 @@ class MonopolyBoard:
             success, jail_message = current_player.attempt_jail_roll(die1, die2)
             if success:
                 # Player got out of jail, can move normally
-                current_player.move(total_roll)
-                current_position = current_player.position
+                current_position, passed_go = current_player.move(total_roll)
                 space_details = self.get_space_details(current_position)
                 
                 # Handle property transactions
@@ -364,13 +363,16 @@ class MonopolyBoard:
                 if space_details["type"] in ["regular_property", "railroad_property", "utility_property"]:
                     transaction_message = self._handle_property_transaction(current_player, space_details)
                 
+                # Build message with GO passing info
+                go_message = " Passed GO! Collected $200." if passed_go else ""
+                
                 # Advance to next player's turn
                 self.player_turn = (self.player_turn + 1) % len(self.players)
                 
                 self.save_to_redis()
                 return {
                     "success": True, 
-                    "message": f"{player} rolled ({die1}, {die2}). {jail_message} {transaction_message}", 
+                    "message": f"{player} rolled ({die1}, {die2}). {jail_message}{go_message} {transaction_message}", 
                     "board": self.to_dict(),
                     "space_details": space_details
                 }
@@ -388,21 +390,44 @@ class MonopolyBoard:
                 }
         
         # Normal move (player not in jail)
-        current_player.move(total_roll)
-        current_position = current_player.position
+        current_position, passed_go = current_player.move(total_roll)
         space_details = self.get_space_details(current_position)
         
-        # Handle special spaces
-        if space_details["name"] == "Go To Jail":
-            current_player.go_to_jail()
-            current_position = current_player.position
-            space_details = self.get_space_details(current_position)
-            transaction_message = "Sent to jail!"
-        else:
+        # Handle different types of spaces
+        transaction_message = ""
+        
+        if space_details["type"] == "special_space":
+            # Handle special spaces (Go, Jail, Free Parking, Go To Jail, taxes)
+            transaction_message = self._handle_special_space(current_player, space_details, total_roll)
+            
+            # If player was sent to jail, update position and space details
+            if space_details["name"] == "Go To Jail":
+                current_position = current_player.position
+                space_details = self.get_space_details(current_position)
+                
+        elif space_details["type"] == "chance_chest_space":
+            # Handle Chance and Community Chest spaces
+            transaction_message = self._handle_chance_and_chest_spaces(current_player, space_details)
+            
+        elif space_details["type"] in ["regular_property", "railroad_property", "utility_property"]:
             # Handle property transactions
-            transaction_message = ""
-            if space_details["type"] in ["regular_property", "railroad_property", "utility_property"]:
+            if space_details["type"] == "utility_property" and space_details["owner"] is not None and space_details["owner"] != current_player.name:
+                # For utilities, use actual dice roll for rent calculation
+                rent_amount = self._calculate_utility_rent(space_details, total_roll)
+                current_player.pay(rent_amount)
+                
+                # Find the owner and pay them rent
+                for player_obj in self.players:
+                    if player_obj.name == space_details["owner"]:
+                        player_obj.receive(rent_amount)
+                        break
+                
+                transaction_message = f"Paid ${rent_amount} rent to {space_details['owner']} for {space_details['name']} (dice roll: {total_roll})."
+            else:
                 transaction_message = self._handle_property_transaction(current_player, space_details)
+        
+        # Build message with GO passing info
+        go_message = " Passed GO! Collected $200." if passed_go else ""
         
         # Advance to next player's turn
         self.player_turn = (self.player_turn + 1) % len(self.players)
@@ -410,7 +435,7 @@ class MonopolyBoard:
         self.save_to_redis()
         return {
             "success": True, 
-            "message": f"{player} rolled ({die1}, {die2}) = {total_roll} and moved to position {current_position}. {transaction_message}", 
+            "message": f"{player} rolled ({die1}, {die2}) = {total_roll} and moved to position {current_position}.{go_message} {transaction_message}", 
             "board": self.to_dict(),
             "space_details": space_details
         }
@@ -541,6 +566,70 @@ class MonopolyBoard:
             return 7 * multiplier
         
         return 0
+    
+    def _handle_special_space(self, current_player: Player, space_details: dict, dice_roll: int) -> str:
+        """Handle landing on special spaces like Go, Jail, Free Parking, Go To Jail, and taxes."""
+        space_name = space_details["name"]
+        
+        if space_name == "Go":
+            # Player lands on Go - they already collected $200 for passing/landing on Go
+            # No additional money is collected for landing on Go
+            return "Landed on Go! Already collected $200 for passing Go."
+        
+        elif space_name == "Jail / Just Visiting":
+            # Player is just visiting jail, no action needed
+            return "Just visiting jail."
+        
+        elif space_name == "Free Parking":
+            # Free Parking - nothing happens in standard Monopoly
+            return "Free parking! Nothing happens."
+        
+        elif space_name == "Go To Jail":
+            # Send player to jail
+            current_player.go_to_jail()
+            return "Go to jail! Do not pass Go, do not collect $200."
+        
+        elif space_name == "Income Tax":
+            # Income Tax - pay $200 or 10% of net worth (whichever is less)
+            net_worth = current_player.net_worth()
+            tax_amount = min(200, net_worth // 10)  # 10% of net worth or $200, whichever is less
+            
+            if current_player.pay(tax_amount):
+                return f"Income Tax! Paid ${tax_amount}."
+            else:
+                return f"Income Tax! Player went bankrupt trying to pay ${tax_amount}."
+        
+        elif space_name == "Luxury Tax":
+            # Luxury Tax - pay $75 (in classic Monopoly it's $75)
+            if current_player.pay(75):
+                return "Luxury Tax! Paid $75."
+            else:
+                return "Luxury Tax! Player went bankrupt trying to pay $75."
+        
+        return f"Landed on {space_name}."
+    
+    def _handle_chance_and_chest_spaces(self, current_player: Player, space_details: dict) -> str:
+        """Handle landing on Chance and Community Chest spaces."""
+        space_name = space_details["name"]
+        
+        if space_name == "Chance":
+            # TODO: Implement Chance card drawing
+            return "Landed on Chance! Draw a Chance card. (Not implemented yet)"
+        
+        elif space_name == "Community Chest":
+            # TODO: Implement Community Chest card drawing
+            return "Landed on Community Chest! Draw a Community Chest card. (Not implemented yet)"
+        
+        return f"Landed on {space_name}."
+    
+    def _calculate_utility_rent(self, space_details: dict, dice_roll: int) -> int:
+        """Calculate rent for utilities based on actual dice roll."""
+        owner = space_details["owner"]
+        utilities_owned = sum(1 for prop in self.utility_properties if prop.owner == owner)
+        
+        # If owner has 1 utility, multiply dice roll by 4; if 2 utilities, multiply by 10
+        multiplier = 4 if utilities_owned == 1 else 10
+        return dice_roll * multiplier
     
     def reset(self, new_players: list[str]):
         self.state = "is_playing"

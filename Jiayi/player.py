@@ -21,23 +21,27 @@ class Player:
     jail_turns: int = 0
     bankrupt: bool = False
 
-    def move(self, steps: int, board_size: int = 40) -> int:
+    def move(self, steps: int, board_size: int = 40) -> tuple[int, bool]:
         """
         Move the player forward by 'steps'.
         Pass GO (position 0) to collect $200.
 
         Returns:
-            int: New position on the board.
+            tuple[int, bool]: (New position on the board, whether player passed GO)
         """
         if self.bankrupt:
-            return self.position
+            return self.position, False
 
         old_pos = self.position
         self.position = (self.position + steps) % board_size
-        # Passed or landed on GO
-        if self.position < old_pos:
+        
+        # Check if player passed or landed on GO
+        # This happens when new position is less than old position (wrapped around)
+        # OR when we cross position 0 during the move
+        passed_go = self.position < old_pos or (old_pos + steps) >= board_size
+        if passed_go:
             self.receive(200)
-        return self.position
+        return self.position, passed_go
 
     def move_to(self, new_position: int, collect_go: bool = False) -> None:
         """
