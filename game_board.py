@@ -275,6 +275,21 @@ class MonopolyBoard:
     def is_my_turn(self, player: str) -> bool:
         return self.state == "is_playing" and player == self.players[self.player_turn].name
     
+    def check_game_over(self) -> bool:
+        """Check if the game is over (only one player left non-bankrupt)."""
+        active_players = [p for p in self.players if not p.bankrupt]
+        if len(active_players) <= 1:
+            self.state = "has_winner"
+            return True
+        return False
+    
+    def get_winner(self) -> str:
+        """Get the winner's name if game is over."""
+        active_players = [p for p in self.players if not p.bankrupt]
+        if len(active_players) == 1:
+            return active_players[0].name
+        return "No winner yet"
+    
     def get_space_details(self, position: int) -> dict:
         """Get detailed information about a space based on its position."""
         # Check regular properties
@@ -343,11 +358,16 @@ class MonopolyBoard:
         }
 
     def make_move(self, player: str, index: int) -> dict:
+        # Check for game over condition at the beginning of each turn
+        if self.check_game_over():
+            winner = self.get_winner()
+            return {"success": False, "message": f"Game Over! {winner} wins!", "winner": winner}
+        
         if self.state != "is_playing":
             return {"success": False, "message": "Game is over. Please reset."}
 
         if not self.is_my_turn(player):
-            return {"success": False, "message": f"It is not {player}'s turn."} 
+            return {"success": False, "message": f"It is not {player}'s turn."}
         
         current_player = self.players[self.player_turn]
         
@@ -370,6 +390,19 @@ class MonopolyBoard:
                 # Build message with GO passing info
                 go_message = " Passed GO! Collected $200." if passed_go else ""
                 
+                # Check for bankruptcy and game over
+                if self.check_game_over():
+                    winner = self.get_winner()
+                    game_over_message = f" Game Over! {winner} wins!"
+                    self.save_to_redis()
+                    return {
+                        "success": True, 
+                        "message": f"{player} rolled ({die1}, {die2}). {jail_message}{go_message} {transaction_message}{game_over_message}", 
+                        "board": self.to_dict(),
+                        "space_details": space_details,
+                        "winner": winner
+                    }
+                
                 # Advance to next player's turn
                 self.player_turn = (self.player_turn + 1) % len(self.players)
                 
@@ -382,6 +415,19 @@ class MonopolyBoard:
                 }
             else:
                 # Player is still in jail
+                # Check for bankruptcy and game over (player might have gone bankrupt paying jail fine)
+                if self.check_game_over():
+                    winner = self.get_winner()
+                    game_over_message = f" Game Over! {winner} wins!"
+                    self.save_to_redis()
+                    return {
+                        "success": True, 
+                        "message": f"{player} rolled ({die1}, {die2}). {jail_message}{game_over_message}", 
+                        "board": self.to_dict(),
+                        "space_details": self.get_space_details(10),  # Jail position
+                        "winner": winner
+                    }
+                
                 # Advance to next player's turn
                 self.player_turn = (self.player_turn + 1) % len(self.players)
                 
@@ -433,6 +479,19 @@ class MonopolyBoard:
         # Build message with GO passing info
         go_message = " Passed GO! Collected $200." if passed_go else ""
         
+        # Check for bankruptcy and game over
+        if self.check_game_over():
+            winner = self.get_winner()
+            game_over_message = f" Game Over! {winner} wins!"
+            self.save_to_redis()
+            return {
+                "success": True, 
+                "message": f"{player} rolled ({die1}, {die2}) = {total_roll} and moved to position {current_position}.{go_message} {transaction_message}{game_over_message}", 
+                "board": self.to_dict(),
+                "space_details": space_details,
+                "winner": winner
+            }
+        
         # Advance to next player's turn
         self.player_turn = (self.player_turn + 1) % len(self.players)
         
@@ -451,10 +510,14 @@ class MonopolyBoard:
         # If property is unowned, indicate that a purchase decision is needed
         if owner is None:
             buy_price = space_details["buy_price"]
-            if current_player.money >= buy_price:
-                return f"Can buy {property_name} for ${buy_price}."
+            # Only prompt for purchase if buy_price > 0 to avoid zero cost properties
+            if buy_price > 0:
+                if current_player.money >= buy_price:
+                    return f"Can buy {property_name} for ${buy_price}."
+                else:
+                    return f"Cannot afford {property_name} (${buy_price})."
             else:
-                return f"Cannot afford {property_name} (${buy_price})."
+                return f"Landed on {property_name} (no purchase required)."
             
         # If property is owned by another player, pay rent
         elif owner != current_player.name:
@@ -546,7 +609,30 @@ class MonopolyBoard:
         if space_details["type"] == "regular_property":
             # For regular properties, rent is based on house count (index 0 for no houses)
             rent_prices = space_details["rent_price"]
-            return rent_prices[0]  # Basic rent with no houses
+            owner = space_details["owner"]
+            color = space_details["color"]
+            
+            # Check if owner has monopoly (owns all properties in this color group)
+            properties_in_color = [prop for prop in self.regular_properties if prop.color == color]
+            owned_properties_in_color = [prop for prop in properties_in_color if prop.owner == owner]
+            
+            # Get house count for this specific property
+            house_count = 0
+            for prop in self.regular_properties:
+                if prop.position == space_details["position"]:
+                    house_count = prop.house_count
+                    break
+            
+            # If owner has monopoly, calculate rent based on house count
+            if len(owned_properties_in_color) == len(properties_in_color):
+                if house_count == 0:
+                    return rent_prices[1]  # Set rent for monopoly with no houses (index 1)
+                elif house_count <= 4:
+                    return rent_prices[house_count + 1]  # Rent for 1-4 houses (indices 2-5)
+                else:  # house_count == 5 (hotel)
+                    return rent_prices[6]  # Rent for hotel (index 6)
+            else:
+                return rent_prices[0]  # Basic rent with no monopoly (index 0)
         
         elif space_details["type"] == "railroad_property":
             # For railroads, rent depends on how many railroads the owner has
@@ -570,6 +656,121 @@ class MonopolyBoard:
             return 7 * multiplier
         
         return 0
+    
+    def get_monopoly_sets(self, player_name: str) -> list[dict]:
+        """Get all monopoly sets owned by a player."""
+        monopoly_sets = []
+        
+        # Group properties by color
+        color_groups = {}
+        for prop in self.regular_properties:
+            if prop.color not in color_groups:
+                color_groups[prop.color] = []
+            color_groups[prop.color].append(prop)
+        
+        # Check each color group for monopoly
+        for color, properties in color_groups.items():
+            owned_properties = [prop for prop in properties if prop.owner == player_name]
+            if len(owned_properties) == len(properties):  # Player owns all properties in this color
+                monopoly_sets.append({
+                    "color": color,
+                    "properties": owned_properties
+                })
+        
+        return monopoly_sets
+    
+    def can_buy_houses(self, player_name: str, property_position: int) -> tuple[bool, str]:
+        """Check if a player can buy a house on a specific property."""
+        # Find the property
+        target_property = None
+        for prop in self.regular_properties:
+            if prop.position == property_position:
+                target_property = prop
+                break
+        
+        if not target_property:
+            return False, "Property not found"
+        
+        if target_property.owner != player_name:
+            return False, "You don't own this property"
+        
+        # Check if player has monopoly
+        monopoly_sets = self.get_monopoly_sets(player_name)
+        player_monopoly = None
+        for monopoly_set in monopoly_sets:
+            if target_property in monopoly_set["properties"]:
+                player_monopoly = monopoly_set
+                break
+        
+        if not player_monopoly:
+            return False, "You must own all properties in the color group to buy houses"
+        
+        # Check if property already has a hotel
+        if target_property.house_count >= 5:
+            return False, "Property already has a hotel"
+        
+        # Check even building rule (can't have more than 1 house difference)
+        min_houses = min(prop.house_count for prop in player_monopoly["properties"])
+        if target_property.house_count > min_houses:
+            return False, "Must build evenly across the monopoly set"
+        
+        # Check if player has enough money
+        house_cost = target_property.house_hotel_price
+        player = next(p for p in self.players if p.name == player_name)
+        if player.money < house_cost:
+            return False, f"Insufficient funds. Need ${house_cost}"
+        
+        return True, "Can buy house"
+    
+    def buy_house(self, player_name: str, property_position: int) -> dict:
+        """Buy a house on a specific property."""
+        can_buy, message = self.can_buy_houses(player_name, property_position)
+        
+        if not can_buy:
+            return {"success": False, "message": message}
+        
+        # Find the property and player
+        target_property = None
+        for prop in self.regular_properties:
+            if prop.position == property_position:
+                target_property = prop
+                break
+        
+        player = next(p for p in self.players if p.name == player_name)
+        
+        # Buy the house
+        house_cost = target_property.house_hotel_price
+        player.pay(house_cost)
+        target_property.house_count += 1
+        
+        # Save to Redis
+        self.save_to_redis()
+        
+        if target_property.house_count == 5:
+            return {"success": True, "message": f"Bought hotel on {target_property.name} for ${house_cost}"}
+        else:
+            return {"success": True, "message": f"Bought house on {target_property.name} for ${house_cost}"}
+    
+    def get_house_buying_options(self, player_name: str) -> list[dict]:
+        """Get all properties where a player can buy houses."""
+        options = []
+        monopoly_sets = self.get_monopoly_sets(player_name)
+        
+        for monopoly_set in monopoly_sets:
+            for prop in monopoly_set["properties"]:
+                can_buy, message = self.can_buy_houses(player_name, prop.position)
+                if can_buy:
+                    house_word = "hotel" if prop.house_count == 4 else "house"
+                    options.append({
+                        "position": prop.position,
+                        "name": prop.name,
+                        "color": prop.color,
+                        "house_count": prop.house_count,
+                        "house_cost": prop.house_hotel_price,
+                        "description": f"{prop.name} ({prop.house_count} houses) - ${prop.house_hotel_price} for {house_word}"
+                    })
+        
+        return options
     
     def _handle_special_space(self, current_player: Player, space_details: dict, dice_roll: int) -> str:
         """Handle landing on special spaces like Go, Jail, Free Parking, Go To Jail, and taxes."""
@@ -622,7 +823,7 @@ class MonopolyBoard:
             
             # If it's a "Get Out of Jail Free" card, add it to the player's collection
             if keep_card:
-                current_player.get_out_of_jail_free_cards += 1
+                current_player.get_out_of_jail_free += 1
                 return f"Landed on Chance! Drew: {card.description}. Card kept for future use."
             else:
                 # Execute the card's action
@@ -635,7 +836,7 @@ class MonopolyBoard:
             
             # If it's a "Get Out of Jail Free" card, add it to the player's collection
             if keep_card:
-                current_player.get_out_of_jail_free_cards += 1
+                current_player.get_out_of_jail_free += 1
                 return f"Landed on Community Chest! Drew: {card.description}. Card kept for future use."
             else:
                 # Execute the card's action
@@ -991,6 +1192,33 @@ def post_reset(req: ResetRequest):
     board.reset(player_names)
     
     return {"success": True, "message": f"Game reset with {num_players} players", "players": player_names}
+
+
+class HousePurchaseRequest(BaseModel):
+    player: str
+    position: int
+
+@app.post("/buy_house")
+def post_buy_house(req: HousePurchaseRequest):
+    board = MonopolyBoard.load_from_redis()
+    result = board.buy_house(req.player, req.position)
+    
+    if not result["success"]:
+        raise HTTPException(status_code=400, detail=result["message"])
+    
+    return result
+
+@app.get("/house_options/{player}")
+def get_house_options(player: str):
+    board = MonopolyBoard.load_from_redis()
+    options = board.get_house_buying_options(player)
+    return {"options": options}
+
+@app.get("/monopolies/{player}")
+def get_monopolies(player: str):
+    board = MonopolyBoard.load_from_redis()
+    monopolies = board.get_monopoly_sets(player)
+    return {"monopolies": monopolies}
 
 
 if __name__ == "__main__":
