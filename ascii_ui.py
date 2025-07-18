@@ -258,19 +258,22 @@ class MonopolyUI:
             # Calculate position coordinates
             x, y = self.get_position_coordinates(position, start_x, start_y, cell_size, board_size)
             
-            # Draw player token
-            token_size = 8
-            # Position players vertically instead of horizontally
-            offset_x = 5
-            offset_y = (i % 6) * 8 + 5  # Vertical offset for multiple players on same space
+            # Draw player token - much bigger and more visible
+            token_size = 16  # Increased from 8 to 16
+            # Position players in a 2x3 grid pattern for better visibility
+            grid_x = i % 2  # 0 or 1 for horizontal position
+            grid_y = i // 2  # 0, 1, 2 for vertical position
+            offset_x = 5 + (grid_x * 18)  # Horizontal offset with spacing
+            offset_y = 5 + (grid_y * 18)  # Vertical offset with spacing
             
+            # Draw a larger token with better contrast
             self.board_canvas.create_oval(x + offset_x, y + offset_y, 
                                         x + offset_x + token_size, y + offset_y + token_size,
-                                        fill=color, outline="black", width=1, tags="player_token")
+                                        fill=color, outline="black", width=2, tags="player_token")
             
-            # Add player number
+            # Add player number with larger, more visible font
             self.board_canvas.create_text(x + offset_x + token_size//2, y + offset_y + token_size//2,
-                                        text=str(i+1), font=("Arial", 6, "bold"), 
+                                        text=str(i+1), font=("Arial", 10, "bold"), 
                                         fill="white", tags="player_token")
     
     def get_position_coordinates(self, position, start_x, start_y, cell_size, board_size):
